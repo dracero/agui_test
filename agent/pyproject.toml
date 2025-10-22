@@ -1,0 +1,18 @@
+[project]
+name = "agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "ag-ui-adk>=0.3.1",
+    "aiohttp>=3.13.1",
+    "fastapi>=0.119.1",
+    "google-adk>=1.16.0",
+    "pydantic>=2.12.3",
+    "python-dotenv>=1.1.1",
+    "qdrant-client>=1.15.1",
+    "torch>=2.9.0",
+    "transformers>=4.57.1",
+    "uvicorn>=0.38.0",
+]

@@ -1,0 +1,9 @@
+node_modules
+
+
+# Archivos de entorno (no subir secretos)
+.env
+.env.local
+# Variantes por carpeta (por si se crean en subcarpetas)
+agent/.env
+agent/.env.local

@@ -1,0 +1,72 @@
+/* src/app/globals.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  color: rgb(33, 33, 33);
+  background: rgb(250, 250, 250);
+}
+
+/* Personalización de CopilotKit Chat */
+@layer base {
+  :root {
+    --copilot-kit-primary-color: #2563eb;
+    --copilot-kit-contrast-color: #ffffff;
+    --copilot-kit-background-color: #ffffff;
+    --copilot-kit-secondary-color: #f3f4f6;
+    --copilot-kit-response-button-background-color: #dbeafe;
+  }
+}
+
+/* Animaciones suaves para mensajes */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scrollbar personalizado */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Soporte para dark mode (opcional) */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --copilot-kit-primary-color: #3b82f6;
+    --copilot-kit-background-color: #1f2937;
+    --copilot-kit-secondary-color: #374151;
+  }
+}
