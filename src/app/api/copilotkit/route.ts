@@ -15,9 +15,11 @@ const serviceAdapter = new ExperimentalEmptyAdapter();
 const runtime = new CopilotRuntime({
   agents: {
     // URL del backend FastAPI con el agente de Física
+    // Se hace un cast a `any` para evitar el error de tipos causado por
+    // múltiples copias de @ag-ui/client en node_modules (tipos incompatibles).
     "asistente_fisica": new HttpAgent({
       url: process.env.BACKEND_URL || "http://localhost:8000/"
-    }),
+    }) as unknown as any,
   }
 });
 
