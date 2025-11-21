@@ -1,9 +1,60 @@
+# Dependencies
 node_modules
+agent/.venv
+agent/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
 
-
-# Archivos de entorno (no subir secretos)
+# Environment variables (no subir secretos)
 .env
 .env.local
-# Variantes por carpeta (por si se crean en subcarpetas)
+.env.*.local
 agent/.env
 agent/.env.local
+
+# Next.js
+.next/
+out/
+build/
+dist/
+
+# Production
+/build
+/.next/
+/out/
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local development
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Testing
+coverage/
+.nyc_output/
+
+# Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Qdrant data (si usas Qdrant local)
+qdrant_storage/
+
+# Metadata generados
+agent/pdf_metadata.json
+agent/trayectoria_adk.json
+
+# PDFs (opcional - descomenta si no quieres subir los PDFs)
+# pdfs/
+# *.pdf
