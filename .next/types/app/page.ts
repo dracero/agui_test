@@ -1,4 +1,4 @@
-// File: /home/cetec/NodeProjects/agui_test/src/app/page.tsx
+// File: /media/dracero/08c67654-6ed7-4725-b74e-50f29ea60cb2/NodeProjects/agui_test/src/app/page.tsx
 import * as entry from '../../../src/app/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

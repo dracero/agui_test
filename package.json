@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "concurrently --kill-others \"npm run dev:ui\" \"npm run dev:agent\"",
     "dev:all": "concurrently --kill-others \"npm run dev:ui\" \"npm run dev:agent\"",
     "dev:ui": "next dev",
-    "dev:agent": "cd ../agent && python agent.py",
+    "dev:agent": "cd agent && uv run agent.py",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

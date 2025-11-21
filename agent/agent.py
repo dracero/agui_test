@@ -7,521 +7,839 @@ load_dotenv()
 
 import json
 import os
-from typing import Dict, List, Any, Optional
-from fastapi import FastAPI
-from ag_ui_adk import ADKAgent, add_adk_fastapi_endpoint
-
-# ADK imports
-from google.adk.agents import LlmAgent
-from google.adk.agents.callback_context import CallbackContext
-from google.adk.tools import ToolContext
-from google.adk.models import LlmResponse, LlmRequest
-from google.genai import types
-
-from pydantic import BaseModel, Field
-
-# Importar componentes de embeddings y Qdrant
-import torch
-from transformers import AutoTokenizer, AutoModel
-from qdrant_client import AsyncQdrantClient
+import time
 import asyncio
+import nest_asyncio
+import torch
+from typing import Dict, List, Optional, Any
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from PyPDF2 import PdfReader
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.models import PointStruct, VectorParams, Distance
+from transformers import AutoTokenizer, AutoModel
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.chat_history import BaseChatMessageHistory
 
-# ========================================
-# ESTADO DE LA CONVERSACIÓN
-# ========================================
+# Imports de Google ADK
+from ag_ui_adk import ADKAgent, add_adk_fastapi_endpoint
+from google.adk.agents import LlmAgent, BaseAgent
+from google.adk.sessions import InMemorySessionService
+from google.adk.runners import Runner
+from pydantic import BaseModel, ConfigDict
+from google.genai import types, Client
 
-class ConversacionState(BaseModel):
-    """Estado de la conversación con el usuario."""
-    historial: List[Dict[str, str]] = Field(
-        default_factory=list,
-        description='Historial de consultas y respuestas',
-    )
-    ultimo_tema: Optional[str] = Field(
-        default=None,
-        description='Último tema clasificado'
-    )
-    contexto_documentos: Optional[str] = Field(
-        default=None,
-        description='Últimos fragmentos relevantes encontrados'
-    )
+# Aplicar nest_asyncio para permitir loops anidados
+nest_asyncio.apply()
 
+# Mock observe decorator if langfuse is not configured or fails
+try:
+    from langfuse import observe
+except ImportError:
+    def observe(*args, **kwargs):
+        def decorator(func):
+            return func
+        return decorator
 
-# ========================================
-# CONFIGURACIÓN GLOBAL
-# ========================================
+class AsistenteFisica:
+    """Clase unificada para el asistente de física con procesamiento de PDFs, RAG y memoria semántica usando Google ADK"""
 
-QDRANT_URL = os.getenv("QDRANT_URL")
-QDRANT_KEY = os.getenv("QDRANT_KEY")
-COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "documentos_pdf")
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+    def __init__(self):
+        # Configurar APIs
+        self._setup_apis()
 
-# Inicializar modelo de embeddings globalmente
-device = "cuda" if torch.cuda.is_available() else "cpu"
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-embedding_model = AutoModel.from_pretrained(MODEL_NAME).to(device)
+        # Inicializar componentes
+        self.llm = None
+        self.adk_model = None
+        self.memoria_semantica = None
+        self.agents = {}
+        self.session_service = None
+        self.runner = None
+        self.temario = ""
+        self.contenido_completo = ""
 
-# Temario del curso (se puede cargar desde archivo)
-TEMARIO_FISICA = """
-FÍSICA I - UNIVERSIDAD DE BUENOS AIRES
+        # Configuración de embedding
+        self.model_name = "sentence-transformers/all-MiniLM-L6-v2"
+        self.tokenizer = None
+        self.model = None
 
-UNIDAD 1: CINEMÁTICA
-- Movimiento en una dimensión
-- Movimiento en dos y tres dimensiones
-- Movimiento circular
-- Movimiento relativo
+        # Configuración de Qdrant
+        self.qdrant_url = os.getenv("QDRANT_URL")
+        self.qdrant_api_key = os.getenv("QDRANT_KEY")
+        self.collection_name = os.getenv("QDRANT_COLLECTION_NAME", "documentos_pdf")
 
-UNIDAD 2: DINÁMICA
-- Leyes de Newton
-- Fuerzas y diagramas de cuerpo libre
-- Fricción y resistencia
-- Movimiento circular dinámico
+        print("✅ AsistenteFisica inicializado correctamente")
 
-UNIDAD 3: TRABAJO Y ENERGÍA
-- Trabajo mecánico
-- Energía cinética y potencial
-- Conservación de la energía
-- Potencia
+    def _setup_apis(self):
+        """Configurar las APIs necesarias"""
+        # Ya cargadas por load_dotenv
+        if not os.getenv("GOOGLE_API_KEY"):
+            print("⚠️ GOOGLE_API_KEY no encontrada en variables de entorno")
+        print("✅ APIs configuradas")
 
-UNIDAD 4: ONDAS Y SONIDO
-- Movimiento armónico simple
-- Ondas mecánicas
-- Efecto Doppler
-- Interferencia y resonancia
+    def inicializar_componentes(self):
+        """Inicializar todos los componentes del asistente"""
+        self._inicializar_modelos()
+        self._inicializar_memoria()
+        self._inicializar_adk()
+        self._inicializar_modelo_embedding()
+        print("✅ Todos los componentes inicializados")
 
-UNIDAD 5: MECÁNICA DE FLUIDOS
-- Estática de fluidos
-- Dinámica de fluidos
-- Ecuación de Bernoulli
+    ###
+    # Función auxiliar para obtener respuestas
+    async def _get_agent_response(self, agent, input_data):
+        """Función auxiliar para obtener respuesta de un agente ADK"""
+        try:
+            # Formatear el prompt para el agente
+            if isinstance(input_data, dict):
+                prompt = self._format_prompt_for_agent(agent.name, input_data)
+            else:
+                prompt = str(input_data)
+
+            # Método 1: Usar Runner.run() - La forma estándar en ADK
+            try:
+                # Crear runner con el agente
+                runner = Runner(agent)
+
+                # Ejecutar el agente con el prompt
+                response = await runner.run(prompt)
+
+                # Extraer la respuesta del objeto response
+                if hasattr(response, 'text'):
+                    return response.text
+                elif hasattr(response, 'content'):
+                    return response.content
+                elif hasattr(response, 'message'):
+                    return response.message
+                else:
+                    return str(response)
+
+            except Exception as runner_error:
+                print(f"Error con Runner.run(): {runner_error}")
+                
+                # Fallback manual
+                raise runner_error
+
+        except Exception as e:
+            print(f"Error ejecutando agente {agent.name}: {e}")
+
+            # Fallback: usar el modelo LLM directamente
+            try:
+                messages = [
+                    SystemMessage(content=getattr(agent, 'instruction', 'You are a helpful AI assistant.')),
+                    HumanMessage(content=prompt)
+                ]
+                response = self.llm.invoke(messages)
+                return response.content
+            except Exception as fallback_error:
+                print(f"Error en fallback para agente {agent.name}: {fallback_error}")
+                return None
+    ###
+
+    def _format_prompt_for_agent(self, agent_name, data):
+        """Formatear el prompt según el agente específico"""
+        if agent_name == "clasificador":
+            return f"""
+                    TEMARIO DE FÍSICA:
+                    {data.get('temario', '')}
+
+                    CONTEXTO DE CONVERSACIÓN PREVIA:
+                    {data.get('contexto_memoria', '')}
+
+                    CONSULTA DEL USUARIO:
+                    {data.get('consulta_usuario', '')}
+
+                    Clasifica esta consulta según el temario proporcionado.
+                    """
+        elif agent_name == "buscador":
+                                return f"""
+                    CLASIFICACIÓN:
+                    {data.get('clasificacion', '')}
+
+                    CONSULTA ORIGINAL:
+                    {data.get('consulta_original', '')}
+
+                    Genera la mejor consulta de búsqueda para esta información.
+                    """
+        elif agent_name == "respondedor":
+                                return f"""
+                    **CONSULTA ORIGINAL DEL USUARIO:**
+                    {data.get('consulta_usuario', '')}
+
+                    **CONTEXTO DE CONVERSACIÓN ANTERIOR:**
+                    {data.get('contexto_memoria', '')}
+
+                    **CLASIFICACIÓN TEMÁTICA:**
+                    {data.get('clasificacion', '')}
+
+                    **FRAGMENTOS DE DOCUMENTOS RELEVANTES:**
+                    {data.get('contexto_documentos', '')}
+
+                    Proporciona una respuesta completa y didáctica.
+                    """
+        return str(data)
+
+    def _inicializar_modelos(self):
+        """Inicializar los modelos de lenguaje"""
+        # Configuración común para Gemini
+        gemini_config = {
+            "model": "gemini-2.5-flash",
+            "google_api_key": os.getenv("GOOGLE_API_KEY"),
+            "temperature": 0,
+            "max_output_tokens": None,
+        }
+
+        # LLM para LangChain (para compatibilidad con memoria)
+        self.llm = ChatGoogleGenerativeAI(**gemini_config)
+
+        print("✅ Modelos inicializados")
+
+    def _inicializar_memoria(self):
+        """Inicializar la memoria semántica"""
+        self.memoria_semantica = self.SemanticMemory(llm=self.llm)
+        print("✅ Memoria semántica inicializada")
+
+    def _inicializar_adk(self):
+        """Inicializar componentes ADK"""
+        # Crear servicio de sesiones
+        self.session_service = InMemorySessionService()
+
+        # Crear agentes ANTES del Runner
+        self._crear_agentes()
+
+        # Crear runner principal (opcional, ya que usamos invoke directamente)
+        self.runner = Runner(
+            app_name="Asistente de Física",
+            agent=self.classifier_agent,
+            session_service=self.session_service
+        )
+
+        print("✅ Componentes ADK inicializados")
+
+    def _crear_agentes(self):
+        """Crear los agentes ADK con la sintaxis correcta."""
+        
+        # Agente Clasificador
+        self.classifier_agent = LlmAgent(
+            name="clasificador",
+            model="gemini-2.5-flash",
+            description="Agente especializado en clasificar consultas de física según el temario proporcionado",
+            instruction="""Eres un agente especializado en clasificar consultas de física según el temario proporcionado.
+                            A partir de la consulta de usuario y el contexto, realiza la clasificación.
+
+                            Debes proporcionar tu respuesta en el siguiente formato, y nada más:
+                            TEMA: [número y título]
+                            SUBTEMAS: [lista]
+                            KEYWORDS: [palabras clave]
+                            """
+        )
+
+        # Agente Buscador
+        self.search_agent = LlmAgent(
+            name="buscador",
+            model="gemini-2.5-flash",
+            description="Agente de búsqueda especializado en física",
+            instruction="""Eres un agente de búsqueda especializado en física.
+Recibes una clasificación temática y una consulta original.
+Tu tarea es generar la mejor consulta de búsqueda posible para encontrar esta información en una base de datos vectorial.
+
+Responde SOLAMENTE con la consulta de búsqueda optimizada, sin explicaciones adicionales.
+"""
+        )
+
+        # Agente de Respuesta
+        self.response_agent = LlmAgent(
+            name="respondedor",
+            model="gemini-2.5-flash",
+            description="Profesor experto en física que proporciona explicaciones claras y precisas",
+            instruction="""Eres un profesor experto en física que proporciona explicaciones claras, precisas y didácticas.
+Tu objetivo es responder a la consulta del usuario basándote en la información proporcionada.
+
+**Tus Reglas:**
+- Usa principalmente los "FRAGMENTOS DE DOCUMENTOS RELEVANTES" para construir tu respuesta.
+- Si la información no es suficiente en los documentos, puedes usar tu conocimiento general, pero siempre aclara que la información no proviene de los documentos proporcionados.
+- Usa el "CONTEXTO DE CONVERSACIÓN ANTERIOR" para que tu respuesta fluya naturalmente si esto es parte de un diálogo.
+- Estructura tu respuesta de manera clara, usando ecuaciones (en formato de texto) cuando sea apropiado y explicando los conceptos paso a paso.
+- IMPORTANTE: Nunca digas frases como "Como modelo de lenguaje..." o "Basado en la información...". Actúa como un profesor experto con pleno conocimiento.
+"""
+        )
+
+        self.agents = {
+            'classifier': self.classifier_agent,
+            'search': self.search_agent,
+            'response': self.response_agent
+        }
+        print("✅ Agentes ADK creados correctamente")
+
+    def _inicializar_modelo_embedding(self):
+        """Inicializar el modelo de embeddings"""
+        # Forzar CPU para evitar warnings de CUDA con hardware antiguo
+        device = "cpu" 
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        self.model = AutoModel.from_pretrained(self.model_name).to(device)
+        print("✅ Modelo de embeddings inicializado")
+
+    def leer_pdf(self, nombre_archivo):
+        """Leer contenido de un archivo PDF"""
+        try:
+            reader = PdfReader(nombre_archivo)
+            return "".join(page.extract_text() for page in reader.pages)
+        except Exception as e:
+            print(f"Error al leer {nombre_archivo}: {e}")
+            return ""
+
+    @observe(name="temario", as_type="generation")
+    def procesar_pdfs_temario(self, archivos_pdf):
+        """Procesar PDFs para extraer el temario"""
+        contenido_completo = ""
+
+        for archivo in archivos_pdf:
+            if os.path.exists(archivo):
+                contenido_completo += f"\n--- Contenido de {archivo} ---\n"
+                contenido_completo += self.leer_pdf(archivo)
+        
+        if not contenido_completo:
+            print("⚠️ No se encontró contenido en los PDFs para extraer temario.")
+            # Intentar recuperar de Qdrant si no hay PDFs locales
+            return "Temario no disponible localmente. Se usará información de la base de datos."
+
+        self.contenido_completo = contenido_completo
+
+        # Extraer temario usando LangChain (para compatibilidad)
+        system_message = f"""
+Eres un experto profesor Física I de la Universidad de Buenos Aires.
+Tu tarea es responder preguntas sobre el temario que tiene en los archivos que lees, proporcionando explicaciones claras, detalladas y ejemplos relevantes.
+Responde solo con el contenido, si no está en el contenido di que no tienes eso en tu base de datos.
+Utiliza el siguiente contenido como referencia para tus respuestas:
+---
+{self.contenido_completo}
+---
 """
 
+        user_question = "Sobre que contenidos podes contestarme"
 
-# ========================================
-# HERRAMIENTAS (TOOLS)
-# ========================================
+        messages = [
+            SystemMessage(content=system_message),
+            HumanMessage(content=user_question),
+        ]
 
-def clasificar_consulta(
-    tool_context: ToolContext,
-    consulta: str
-) -> Dict[str, Any]:
-    """
-    Clasifica una consulta del usuario según el temario de física.
-    
-    Args:
-        consulta: La consulta del usuario a clasificar
-    
-    Returns:
-        Dict con tema, subtemas y keywords
-    """
-    try:
-        # Obtener historial del contexto
-        historial = tool_context.state.get("historial", [])
-        contexto_previo = ""
-        
-        if historial:
-            ultimas_3 = historial[-3:]
-            contexto_previo = "\n".join([
-                f"Usuario: {h['consulta']}\nAsistente: {h['respuesta'][:200]}..."
-                for h in ultimas_3
-            ])
-        
-        # Construir prompt para clasificación
-        prompt = f"""
-TEMARIO:
-{TEMARIO_FISICA}
+        ai_msg = self.llm.invoke(messages)
+        self.temario = ai_msg.content
 
-CONTEXTO DE CONVERSACIÓN PREVIA:
-{contexto_previo if contexto_previo else "No hay conversación previa"}
+        # Actualizar el temario en el agente clasificador
+        if hasattr(self, 'classifier_agent'):
+            self.classifier_agent.instruction = f"""Eres un agente especializado en clasificar consultas de física según el temario proporcionado.
+Debes proporcionar:
+1. El número y título del tema principal
+2. Los subtemas relevantes
+3. Palabras clave para búsqueda
 
-CONSULTA DEL USUARIO:
-{consulta}
-
-Clasifica esta consulta según el temario. Responde SOLO con:
+Formato de respuesta:
 TEMA: [número y título]
 SUBTEMAS: [lista]
-KEYWORDS: [palabras clave separadas por comas]
+KEYWORDS: [palabras clave]
+
+TEMARIO DE FÍSICA:
+{self.temario}
 """
-        
-        # Aquí simularíamos una llamada al LLM para clasificar
-        # En la práctica, esto debería hacerse dentro del agente principal
-        return {
-            "status": "success",
-            "clasificacion": prompt,
-            "consulta_original": consulta
-        }
-        
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Error clasificando consulta: {str(e)}"
-        }
 
+        print("✅ Temario extraído correctamente")
+        return self.temario
 
-async def buscar_documentos_async(query: str, top_k: int = 5) -> List[Dict]:
-    """Versión async de búsqueda en Qdrant"""
-    try:
-        # Generar embedding de la consulta
-        inputs = tokenizer(
-            [query],
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=512
-        ).to(device)
-        
-        with torch.no_grad():
-            outputs = embedding_model(**inputs)
-        
-        query_embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy().flatten()
-        
-        # Buscar en Qdrant
-        client = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_KEY)
-        results = await client.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=query_embedding.tolist(),
-            limit=top_k
-        )
-        
-        # Formatear resultados
-        documentos = []
-        for i, result in enumerate(results, 1):
-            payload = result.payload or {}
-            documentos.append({
-                "fragmento": i,
-                "pdf": payload.get("pdf_name", "N/A"),
-                "texto": payload.get("text", "No disponible"),
-                "similitud": round(result.score, 4)
-            })
-        
-        return documentos
-        
-    except Exception as e:
-        print(f"Error en búsqueda: {e}")
-        return []
+    def split_into_chunks(self, text, chunk_size=2000):
+        """Dividir texto en chunks"""
+        return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
 
+    def generate_embeddings(self, chunks, batch_size=32):
+        """Generar embeddings para los chunks"""
+        embeddings = []
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i+batch_size]
+            inputs = self.tokenizer(
+                batch,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512
+            ).to(self.model.device)
 
-def buscar_documentos(
-    tool_context: ToolContext,
-    consulta_busqueda: str,
-    top_k: int = 5
-) -> Dict[str, Any]:
-    """
-    Busca documentos relevantes en la base de datos vectorial.
-    
-    Args:
-        consulta_busqueda: Consulta optimizada para búsqueda
-        top_k: Número de documentos a retornar (default 5)
-    
-    Returns:
-        Dict con los documentos encontrados
-    """
-    try:
-        # Ejecutar búsqueda async en un loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        documentos = loop.run_until_complete(
-            buscar_documentos_async(consulta_busqueda, top_k)
-        )
-        loop.close()
-        
-        # Guardar en el estado para uso posterior
-        contexto_docs = "\n\n".join([
-            f"--- Fragmento {d['fragmento']} (PDF: {d['pdf']}, similitud: {d['similitud']}) ---\n{d['texto']}"
-            for d in documentos
-        ])
-        
-        tool_context.state["contexto_documentos"] = contexto_docs
-        
-        return {
-            "status": "success",
-            "total_encontrados": len(documentos),
-            "documentos": documentos,
-            "contexto_formateado": contexto_docs
-        }
-        
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Error buscando documentos: {str(e)}",
-            "documentos": []
-        }
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+            embeddings.extend(outputs.last_hidden_state[:, 0, :].cpu().numpy())
+        return embeddings
 
+    async def store_in_qdrant(self, points):
+        """Almacenar puntos en Qdrant"""
+        client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key)
 
-def guardar_interaccion(
-    tool_context: ToolContext,
-    consulta: str,
-    respuesta: str,
-    tema: Optional[str] = None
-) -> Dict[str, str]:
-    """
-    Guarda una interacción en el historial de conversación.
-    
-    Args:
-        consulta: Consulta del usuario
-        respuesta: Respuesta del asistente
-        tema: Tema clasificado (opcional)
-    
-    Returns:
-        Dict indicando éxito
-    """
-    try:
-        if "historial" not in tool_context.state:
-            tool_context.state["historial"] = []
-        
-        tool_context.state["historial"].append({
-            "consulta": consulta,
-            "respuesta": respuesta,
-            "tema": tema
-        })
-        
-        if tema:
-            tool_context.state["ultimo_tema"] = tema
-        
-        return {
-            "status": "success",
-            "message": "Interacción guardada"
-        }
-        
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Error guardando interacción: {str(e)}"
-        }
-
-
-# ========================================
-# CALLBACKS
-# ========================================
-
-def on_before_agent(callback_context: CallbackContext):
-    """Inicializar estado si no existe"""
-    if "historial" not in callback_context.state:
-        callback_context.state["historial"] = []
-    if "ultimo_tema" not in callback_context.state:
-        callback_context.state["ultimo_tema"] = None
-    if "contexto_documentos" not in callback_context.state:
-        callback_context.state["contexto_documentos"] = None
-    
-    return None
-
-
-def before_model_modifier(
-    callback_context: CallbackContext, 
-    llm_request: LlmRequest
-) -> Optional[LlmResponse]:
-    """Modifica el prompt del modelo para incluir contexto"""
-    agent_name = callback_context.agent_name
-    
-    if agent_name == "AsistenteFisica":
-        # Obtener contexto del estado
-        historial = callback_context.state.get("historial", [])
-        contexto_docs = callback_context.state.get("contexto_documentos", "")
-        ultimo_tema = callback_context.state.get("ultimo_tema", "")
-        
-        # Construir contexto de conversación
-        contexto_conversacion = "No hay conversación previa."
-        if historial:
-            ultimas_3 = historial[-3:]
-            contexto_conversacion = "\n".join([
-                f"Usuario: {h['consulta']}\nAsistente: {h['respuesta'][:300]}..."
-                for h in ultimas_3
-            ])
-        
-        # Modificar system instruction
-        original_instruction = llm_request.config.system_instruction or types.Content(
-            role="system", 
-            parts=[]
-        )
-        
-        if not isinstance(original_instruction, types.Content):
-            original_instruction = types.Content(
-                role="system", 
-                parts=[types.Part(text=str(original_instruction))]
+        # Crear colección si no existe
+        try:
+            await client.get_collection(self.collection_name)
+        except Exception:
+            await client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(size=len(points[0].vector), distance=Distance.COSINE)
             )
-        
-        if not original_instruction.parts:
-            original_instruction.parts.append(types.Part(text=""))
-        
-        # Agregar contexto al inicio del prompt
-        prefix = f"""Eres un profesor experto en Física I de la UBA.
+            print(f"Colección '{self.collection_name}' creada")
 
-TEMARIO DEL CURSO:
-{TEMARIO_FISICA}
+        # Insertar datos
+        await client.upsert(collection_name=self.collection_name, points=points, wait=True)
+        print(f"{len(points)} chunks almacenados en Qdrant")
 
-CONTEXTO DE CONVERSACIÓN PREVIA:
-{contexto_conversacion}
+    @observe(name="procesar_y_almacenar_pdfs", as_type="span")
+    async def procesar_y_almacenar_pdfs(self, pdf_files):
+        """Procesar PDFs y almacenar en Qdrant"""
+        all_chunks = []
+        pdf_metadata = []
+        global_id_counter = 0
 
-ÚLTIMO TEMA DISCUTIDO: {ultimo_tema if ultimo_tema else "Ninguno"}
+        for pdf_file in pdf_files:
+            if not os.path.exists(pdf_file):
+                # print(f"⚠️ {pdf_file} no encontrado")
+                continue
 
-FRAGMENTOS DE DOCUMENTOS RELEVANTES:
-{contexto_docs if contexto_docs else "No hay documentos cargados aún."}
+            # Procesar PDF
+            text = self.leer_pdf(pdf_file)
+            if text:
+                chunks = self.split_into_chunks(text)
 
----
+                # Registrar metadatos
+                for i, chunk in enumerate(chunks):
+                    all_chunks.append(chunk)
+                    pdf_metadata.append({
+                        "pdf_name": pdf_file,
+                        "chunk_id": i,
+                        "global_id": global_id_counter
+                    })
+                    global_id_counter += 1
 
-"""
-        
-        modified_text = prefix + (original_instruction.parts[0].text or "")
-        original_instruction.parts[0].text = modified_text
-        llm_request.config.system_instruction = original_instruction
+        if not all_chunks:
+            # print("⚠️ No se encontraron chunks para procesar")
+            return
+
+        # Generar embeddings
+        embeddings = self.generate_embeddings(all_chunks)
+
+        # Generar puntos para Qdrant
+        points = [
+            PointStruct(
+                id=meta["global_id"],
+                vector=embedding.tolist(),
+                payload={
+                    "pdf_name": meta["pdf_name"],
+                    "chunk_id": meta["chunk_id"],
+                    "text": all_chunks[idx]
+                }
+            )
+            for idx, (meta, embedding) in enumerate(zip(pdf_metadata, embeddings))
+        ]
+
+        # Almacenar en Qdrant
+        await self.store_in_qdrant(points)
+
+        # Guardar metadatos en JSON
+        metadata_dict = {
+            p.id: {
+                "pdf": p.payload["pdf_name"],
+                "chunk": p.payload["text"]
+            } for p in points
+        }
+
+        with open("pdf_metadata.json", "w", encoding="utf-8") as f:
+            json.dump(metadata_dict, f, ensure_ascii=False, indent=4)
+        print("✅ Metadatos guardados en 'pdf_metadata.json'")
+
+    @observe(name="search_documents", as_type="span")
+    async def search_documents(self, query, top_k=5):
+        """Realizar búsqueda en Qdrant"""
+        try:
+            client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key)
+
+            # Verificar conexión
+            try:
+                await client.get_collection(self.collection_name)
+                # print("✅ Conexión a Qdrant exitosa")
+            except Exception as e:
+                print(f"❌ Error al conectar con Qdrant: {str(e)}")
+                return []
+
+            # Generar embedding de la consulta
+            inputs = self.tokenizer(
+                [query],
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512
+            ).to(self.model.device)
+
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+
+            # Extraer correctamente el embedding y convertir a lista
+            query_embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+            query_embedding = query_embedding.flatten()
+
+            # print(f"🔍 Embedding shape: {query_embedding.shape}")
+
+            # Buscar en Qdrant
+            results = await client.search(
+                collection_name=self.collection_name,
+                query_vector=query_embedding.tolist(),
+                limit=top_k
+            )
+
+            # Formatear resultados
+            formatted_results = []
+            metadata = {}
+
+            if os.path.exists("pdf_metadata.json"):
+                with open("pdf_metadata.json", "r", encoding="utf-8") as f:
+                    metadata = json.load(f)
+
+            for result in results:
+                meta = metadata.get(str(result.id), {})
+                payload = result.payload or {}
+
+                formatted_results.append({
+                    "pdf": meta.get("pdf", payload.get("pdf_name", "N/A")),
+                    "texto": meta.get("chunk", payload.get("text", "Texto no disponible")),
+                    "similitud": round(result.score, 4)
+                })
+
+            return formatted_results
+
+        except Exception as e:
+            error_msg = f"Error en la búsqueda: {str(e)}"
+            print(f"❌ {error_msg}")
+            return [{"pdf": "Error", "texto": error_msg, "similitud": 0}]
+
+    # Función de flujo corregida
+    @observe(name="iniciar_flujo_adk_corregido", as_type="span")
+    async def iniciar_flujo(self, consulta_usuario: str, user_id: str = "default_user"):
+        """
+        Iniciar el flujo completo de procesamiento usando Google ADK
+        """
+        print(f"📝 Consulta recibida de '{user_id}': {consulta_usuario}")
+        trayectoria = []
+        inicio_total = time.time()
+
+        # Obtener contexto de memoria semántica
+        contexto_memoria = self.memoria_semantica.get_context()
+
+        try:
+            # --- Paso 1: Clasificación ---
+            inicio_paso = time.time()
+
+            clasificacion_data = {
+                "consulta_usuario": consulta_usuario,
+                "contexto_memoria": contexto_memoria,
+                "temario": self.temario
+            }
+
+            clasificacion = await self._get_agent_response(
+                self.classifier_agent,
+                clasificacion_data
+            )
+
+            tiempo_clasificacion = time.time() - inicio_paso
+
+            # Verificar que la respuesta no sea None
+            if clasificacion is None:
+                # Fallback si falla la clasificación
+                clasificacion = "TEMA: Consulta General\nSUBTEMAS: []\nKEYWORDS: []"
+
+            trayectoria.append({
+                "agente": "Clasificador",
+                "respuesta": clasificacion,
+                "tiempo": tiempo_clasificacion
+            })
+            print(f"✅ Clasificación completada en {tiempo_clasificacion:.2f}s")
+
+            # --- Paso 2: Generar consulta de búsqueda ---
+            inicio_paso = time.time()
+
+            search_data = {
+                "clasificacion": clasificacion,
+                "consulta_original": consulta_usuario,
+                "contexto_conversacion": contexto_memoria
+            }
+
+            consulta_busqueda = await self._get_agent_response(
+                self.search_agent,
+                search_data
+            )
+
+            tiempo_query = time.time() - inicio_paso
+
+            if consulta_busqueda is None:
+                consulta_busqueda = consulta_usuario
+
+            trayectoria.append({
+                "agente": "GeneraciónConsulta",
+                "respuesta": consulta_busqueda,
+                "tiempo": tiempo_query
+            })
+            print(f"✅ Consulta de búsqueda generada en {tiempo_query:.2f}s")
+
+            # --- Paso 3: Realizar búsqueda en Qdrant ---
+            inicio_paso = time.time()
+            resultados_busqueda = await self.search_documents(consulta_busqueda)
+            tiempo_busqueda = time.time() - inicio_paso
+
+            trayectoria.append({
+                "agente": "BúsquedaQdrant",
+                "respuesta": f"Encontrados {len(resultados_busqueda)} documentos",
+                "tiempo": tiempo_busqueda
+            })
+            print(f"✅ Búsqueda en Qdrant completada en {tiempo_busqueda:.2f}s")
+
+            # --- Paso 4: Generar respuesta final ---
+            inicio_paso = time.time()
+            contexto_busqueda = "\n".join([
+                f"--- Fragmento {i} (PDF: {res['pdf']}) ---\n{res['texto']}"
+                for i, res in enumerate(resultados_busqueda, 1)
+            ])
+
+            response_data = {
+                "consulta_usuario": consulta_usuario,
+                "contexto_memoria": contexto_memoria,
+                "clasificacion": clasificacion,
+                "contexto_documentos": contexto_busqueda
+            }
+
+            respuesta_final = await self._get_agent_response(
+                self.response_agent,
+                response_data
+            )
+
+            tiempo_respuesta = time.time() - inicio_paso
+
+            if respuesta_final is None:
+                raise Exception("La respuesta del agente respondedor es None")
+
+            trayectoria.append({
+                "agente": "RespondeConsulta",
+                "respuesta": respuesta_final,
+                "tiempo": tiempo_respuesta
+            })
+            print(f"✅ Respuesta final generada en {tiempo_respuesta:.2f}s")
+
+            # Actualizar la memoria con la nueva interacción
+            self.memoria_semantica.add_interaction(consulta_usuario, respuesta_final)
+
+            tiempo_total = time.time() - inicio_total
+            
+            # Guardar la trayectoria (opcional, puede fallar si no hay permisos)
+            try:
+                with open("trayectoria_adk.json", "w", encoding="utf-8") as f:
+                    json.dump(trayectoria, f, indent=4, ensure_ascii=False)
+            except Exception:
+                pass
+
+            return respuesta_final
+
+        except Exception as e:
+            print(f"❌ Error en el flujo ADK: {e}")
+            import traceback
+            traceback.print_exc()
+
+            # Devolver una respuesta de fallback usando el conocimiento del modelo
+            fallback_response = f"Lo siento, hubo un error técnico al procesar tu consulta. Por favor, intenta de nuevo."
+            return fallback_response
+
+    # Clase interna para memoria semántica
+    class SemanticMemory:
+        def __init__(self, llm, max_entries=10):
+            self.conversations = []
+            self.max_entries = max_entries
+            self.summary = ""
+            self.direct_history = ""
+            self.llm = llm
+
+            # Usar ChatMessageHistory en lugar de ConversationSummaryBufferMemory
+            self.message_history = ChatMessageHistory()
+
+        def add_interaction(self, query, response):
+            """Añadir interacción a la memoria"""
+            # Añadir a la historia de mensajes
+            self.message_history.add_user_message(query)
+            self.message_history.add_ai_message(response)
+            
+            # Guardar en registro de conversaciones
+            self.conversations.append({"query": query, "response": response})
+            if len(self.conversations) > self.max_entries:
+                self.conversations.pop(0)
+
+            # Mantener historial directo de las últimas 3 interacciones
+            self.direct_history += f"\nUsuario: {query}\nAsistente: {response}\n"
+            if len(self.conversations) > 3:
+                recent = self.conversations[-3:]
+                self.direct_history = ""
+                for conv in recent:
+                    self.direct_history += f"\nUsuario: {conv['query']}\nAsistente: {conv['response']}\n"
+
+            # Actualizar resumen
+            self.update_summary()
+
+        def update_summary(self):
+            """Actualizar resumen de la conversación"""
+            try:
+                # Obtener los mensajes de la historia
+                messages = self.message_history.messages
+                
+                # Si hay muchos mensajes, generar un resumen usando el LLM
+                if len(messages) > 6:
+                    # Tomar los primeros mensajes para resumir
+                    old_messages = messages[:-6]
+                    recent_messages = messages[-6:]
+                    
+                    # Crear prompt para resumir
+                    conversation_text = "\n".join([
+                        f"{'Usuario' if msg.type == 'human' else 'Asistente'}: {msg.content}"
+                        for msg in old_messages
+                    ])
+                    
+                    summary_prompt = [
+                        SystemMessage(content="Resume brevemente la siguiente conversación en 2-3 oraciones."),
+                        HumanMessage(content=conversation_text)
+                    ]
+                    
+                    try:
+                        summary_response = self.llm.invoke(summary_prompt)
+                        summary_text = summary_response.content
+                    except Exception:
+                        summary_text = "Conversación previa sobre física."
+                    
+                    # Construir el contexto con resumen + mensajes recientes
+                    recent_text = "\n".join([
+                        f"{'Usuario' if msg.type == 'human' else 'Asistente'}: {msg.content}"
+                        for msg in recent_messages
+                    ])
+                    
+                    self.summary = f"Resumen de conversación previa: {summary_text}\n\nInteracciones recientes:\n{recent_text}"
+                else:
+                    # Si hay pocos mensajes, simplemente mostrarlos todos
+                    self.summary = f"Interacciones recientes:{self.direct_history}"
+                    
+            except Exception as e:
+                print(f"Error al actualizar resumen: {e}")
+                self.summary = f"Interacciones recientes:{self.direct_history}"
+
+        def get_context(self):
+            """Obtener contexto actual de la conversación"""
+            return self.summary if self.summary.strip() else "No hay conversación previa."
+
+
+# ========================================
+# CONFIGURACIÓN DE AG-UI y FASTAPI
+# ========================================
+
+# Instancia global del asistente
+asistente = AsistenteFisica()
+
+# Crear un agente personalizado que herede de LlmAgent
+
+class RAGAgent(LlmAgent):
+    """Agente personalizado que integra el flujo RAG completo"""
     
-    return None
-
-
-def after_model_modifier(
-    callback_context: CallbackContext,
-    llm_response: LlmResponse
-) -> Optional[LlmResponse]:
-    """Procesa la respuesta del modelo"""
-    agent_name = callback_context.agent_name
+    # Declarar asistente como un campo de Pydantic
+    asistente: Any = None
     
-    if agent_name == "AsistenteFisica":
-        if llm_response.content and llm_response.content.parts:
-            if llm_response.content.role == 'model' and llm_response.content.parts[0].text:
-                # Finalizar invocación después de responder
-                callback_context._invocation_context.end_invocation = True
+    # Configurar el modelo para permitir tipos arbitrarios
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     
-    return None
+    def __init__(self, asistente_instance, **kwargs):
+        # Inicializar LlmAgent con configuración básica
+        super().__init__(
+            name="asistente_fisica_rag",
+            model="gemini-2.5-flash",
+            description="Asistente de Física I de la UBA con sistema RAG completo",
+            instruction="""Eres un profesor experto en Física I de la Universidad de Buenos Aires.
+Ayudas a los estudiantes con sus consultas sobre física usando un sistema RAG que busca en documentos del curso.""",
+            asistente=asistente_instance,
+            **kwargs
+        )
+    
+    async def generate(self, prompt: str, **kwargs) -> str:
+        """
+        Método principal que procesa las consultas del usuario.
+        Este método es llamado por el Runner de ADK.
+        Sobrescribimos este método para usar nuestro flujo RAG personalizado.
+        """
+        try:
+            # Procesar la consulta usando el flujo RAG completo
+            respuesta = await self.asistente.iniciar_flujo(prompt, user_id="usuario_web")
+            return respuesta
+        except Exception as e:
+            print(f"Error en RAGAgent.generate: {e}")
+            import traceback
+            traceback.print_exc()
+            return f"Lo siento, hubo un error al procesar tu consulta. Por favor, intenta de nuevo."
 
-
-# ========================================
-# AGENTE PRINCIPAL
-# ========================================
-
-fisica_agent = LlmAgent(
-    name="AsistenteFisica",
-    model="gemini-2.5-flash",
-    instruction=f"""Eres un profesor experto en Física I de la Universidad de Buenos Aires.
-
-**TU FLUJO DE TRABAJO:**
-
-1. **Cuando recibas una consulta del usuario:**
-   - Primero, usa la herramienta `clasificar_consulta` para identificar el tema
-   - Luego, usa `buscar_documentos` con palabras clave relevantes para encontrar información
-   - Finalmente, responde de forma clara y didáctica basándote en los documentos encontrados
-   - Al terminar, usa `guardar_interaccion` para registrar la conversación
-
-2. **Al responder:**
-   - Usa principalmente los fragmentos de documentos encontrados
-   - Si la información no es suficiente, usa tu conocimiento general de física (pero acláralo)
-   - Estructura tu respuesta con:
-     * Explicación conceptual clara
-     * Fórmulas relevantes (usa formato LaTeX si es apropiado)
-     * Ejemplos prácticos cuando sea posible
-   - Usa un tono educativo y accesible
-   
-3. **IMPORTANTE:**
-   - NUNCA digas "Como modelo de lenguaje..." o "Basado en los documentos..."
-   - Actúa como un profesor experto con conocimiento profundo
-   - Si no encuentras información en los documentos, dilo claramente pero ayuda con lo que sepas
-
-4. **Herramientas disponibles:**
-   - `clasificar_consulta`: Para identificar el tema de la consulta
-   - `buscar_documentos`: Para encontrar información relevante
-   - `guardar_interaccion`: Para registrar la conversación
-
-**EJEMPLO DE FLUJO:**
-Usuario: "¿Qué es el efecto Doppler?"
-1. Usar clasificar_consulta("¿Qué es el efecto Doppler?")
-2. Usar buscar_documentos("efecto Doppler ondas sonido frecuencia", top_k=5)
-3. Responder basándote en los documentos encontrados
-4. Usar guardar_interaccion con la consulta y tu respuesta
-""",
-    tools=[clasificar_consulta, buscar_documentos, guardar_interaccion],
-    before_agent_callback=on_before_agent,
-    before_model_callback=before_model_modifier,
-    after_model_callback=after_model_modifier
-)
-
-
-# ========================================
-# CONFIGURACIÓN DE AG-UI
-# ========================================
+# Crear el agente RAG personalizado
+rag_agent = RAGAgent(asistente)
 
 # Crear instancia de ADK con AG-UI
 adk_fisica_agent = ADKAgent(
-    adk_agent=fisica_agent,
+    adk_agent=rag_agent,
     app_name="fisica_uba_app",
     user_id="estudiante_fisica",
-    session_timeout_seconds=7200,  # 2 horas
+    session_timeout_seconds=7200,
     use_in_memory_services=True
 )
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Gestión del ciclo de vida de la aplicación"""
+    # Startup
+    print("🚀 Iniciando Asistente de Física...")
+    asistente.inicializar_componentes()
+
+    # Procesar PDFs para extraer temario
+    dir_pdf = os.getenv("DIR_PDF", "./pdfs")  # Usar variable de entorno o directorio por defecto
+    archivos_pdf = []
+    
+    if os.path.exists(dir_pdf):
+        archivos_pdf = [
+            os.path.join(dir_pdf, f) 
+            for f in os.listdir(dir_pdf) 
+            if f.lower().endswith('.pdf')
+        ]
+        print(f"📁 Directorio de PDFs: {dir_pdf}")
+        print(f"📚 Encontrados {len(archivos_pdf)} archivos PDF")
+    else:
+        print(f"⚠️ Directorio de PDFs no encontrado: {dir_pdf}")
+    
+    if archivos_pdf:
+        asistente.procesar_pdfs_temario(archivos_pdf)
+        await asistente.procesar_y_almacenar_pdfs(archivos_pdf)
+    else:
+        print("ℹ️ No se encontraron archivos PDF locales. Se usará la base de datos existente.")
+        # Intentar recuperar temario de la base de datos o generar uno genérico
+        # Por ahora dejamos que el flujo normal maneje esto
+        
+    yield
+    # Shutdown
+    print("👋 Apagando Asistente de Física...")
 
 # Crear aplicación FastAPI
 app = FastAPI(
     title="Asistente de Física I - UBA",
     description="Sistema RAG con agentes ADK para consultas de física",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Agregar el endpoint de ADK
 add_adk_fastapi_endpoint(app, adk_fisica_agent, path="/")
 
-
-# ========================================
-# ENDPOINTS ADICIONALES
-# ========================================
-
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "agent": "AsistenteFisica",
-        "model": "gemini-2.5-flash"
-    }
-
-
-@app.get("/info")
-async def agent_info():
-    """Información del agente"""
-    return {
-        "name": "Asistente de Física I - UBA",
-        "description": "Sistema RAG con agentes ADK",
-        "features": [
-            "Clasificación automática de consultas",
-            "Búsqueda en base de datos vectorial (Qdrant)",
-            "Respuestas basadas en documentos del curso",
-            "Memoria de conversación",
-            "Explicaciones didácticas"
-        ],
-        "tools": [
-            "clasificar_consulta - Identifica temas",
-            "buscar_documentos - Busca información relevante",
-            "guardar_interaccion - Registra conversación"
-        ]
-    }
-
-
-# ========================================
-# MAIN
-# ========================================
+    return {"status": "healthy", "agent": "AsistenteFisica"}
 
 if __name__ == "__main__":
     import uvicorn
-    
-    # Verificar variables de entorno
-    if not os.getenv("GOOGLE_API_KEY"):
-        print("⚠️  Warning: GOOGLE_API_KEY no configurada!")
-        print("   Configúrala con: export GOOGLE_API_KEY='tu-clave'")
-        print("   Obtén una clave en: https://makersuite.google.com/app/apikey")
-        print()
-    
-    if not os.getenv("QDRANT_URL") or not os.getenv("QDRANT_KEY"):
-        print("⚠️  Warning: QDRANT_URL o QDRANT_KEY no configuradas!")
-        print("   Configúralas en tu archivo .env")
-        print()
-    
     port = int(os.getenv("PORT", 8000))
-    
-    print(f"""
-    ╔═══════════════════════════════════════════════════════╗
-    ║   🎓 Asistente de Física I - UBA                      ║
-    ║   Powered by Google ADK + AG-UI                       ║
-    ╠═══════════════════════════════════════════════════════╣
-    ║   🌐 Servidor: http://0.0.0.0:{port}                 ║
-    ║   📚 Agente: AsistenteFisica                          ║
-    ║   🤖 Modelo: gemini-2.5-flash                         ║
-    ║   💾 Base de datos: Qdrant                            ║
-    ╚═══════════════════════════════════════════════════════╝
-    """)
-    
     uvicorn.run(app, host="0.0.0.0", port=port)
