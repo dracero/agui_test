@@ -20,6 +20,7 @@ export default function RootLayout({
     <html lang="es">
       <body className={inter.className}>
         <CopilotKit
+          publicLicenseKey="ck_pub_71b6980a1be205bfab840fa8ec445f15"
           runtimeUrl="/api/copilotkit"
           agent="asistente_fisica"
         >

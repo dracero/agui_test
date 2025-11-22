@@ -5,6 +5,7 @@ import { CopilotChat } from "@copilotkit/react-ui";
 import { useCopilotReadable } from "@copilotkit/react-core";
 import "@copilotkit/react-ui/styles.css";
 import { BookOpen } from "lucide-react";
+import MarkdownRenderer from "../components/MarkdownRenderer";
 
 export default function ChatPage() {
   // Proporcionar contexto al agente (opcional)
@@ -19,20 +20,24 @@ export default function ChatPage() {
   return (
     <div className="h-screen flex flex-col">
       {/* Header */}
-      <header className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg">
-        <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
+      <header className="bg-[#003D7A] text-white shadow-lg">
+        <div className="max-w-7xl mx-auto px-3 py-3 sm:px-6 lg:px-8 sm:py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-3">
-              <div className="bg-white/20 backdrop-blur-sm rounded-lg p-2">
-                <BookOpen className="w-6 h-6" />
+            <div className="flex items-center space-x-2 sm:space-x-3">
+              <div className="bg-white rounded-lg p-1.5 sm:p-2">
+                <img
+                  src="/logo-fiuba.png"
+                  alt="FIUBA Logo"
+                  className="w-6 h-6 sm:w-8 sm:h-8 md:w-10 md:h-10 object-contain"
+                />
               </div>
               <div>
-                <h1 className="text-2xl font-bold">Asistente de Física I</h1>
-                <p className="text-blue-100 text-sm">Universidad de Buenos Aires</p>
+                <h1 className="text-xl sm:text-2xl font-bold">Asistente de Física I</h1>
+                <p className="text-blue-100 text-xs sm:text-sm hidden xs:block">Universidad de Buenos Aires</p>
               </div>
             </div>
-            <div className="hidden sm:flex items-center space-x-2 bg-green-500/20 backdrop-blur-sm px-4 py-2 rounded-full">
-              <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+            <div className="hidden sm:flex items-center space-x-2 bg-[#F7941D]/20 backdrop-blur-sm px-4 py-2 rounded-full">
+              <div className="w-2 h-2 bg-[#F7941D] rounded-full animate-pulse"></div>
               <span className="text-sm font-medium">Online</span>
             </div>
           </div>
@@ -71,6 +76,13 @@ export default function ChatPage() {
               "4. Al final, usa 'guardar_interaccion' para registrar la conversación"
             );
           }}
+          AssistantMessage={({ message }) => (
+            <div className="flex justify-start mb-4">
+              <div className="max-w-[80%] rounded-lg px-4 py-2 bg-white border border-gray-200">
+                <MarkdownRenderer content={typeof message === 'string' ? message : message.content || ''} />
+              </div>
+            </div>
+          )}
         />
       </main>
 
@@ -84,7 +96,7 @@ export default function ChatPage() {
               <span className="hidden sm:inline">Basado en documentos del curso</span>
             </div>
             <div className="flex items-center space-x-2">
-              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+              <div className="w-2 h-2 bg-[#F7941D] rounded-full"></div>
               <span className="text-xs">Conectado</span>
             </div>
           </div>
