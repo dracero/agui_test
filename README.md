@@ -82,6 +82,8 @@ cp /ruta/a/tus/pdfs/*.pdf pdfs/
 
 ### 5. Ejecutar la aplicación
 
+#### Opción 1: Sistema Base (Sin Optimización)
+
 ```bash
 npm run dev
 ```
@@ -89,6 +91,55 @@ npm run dev
 Esto iniciará:
 - Frontend en `http://localhost:3000`
 - Backend en `http://localhost:8000`
+
+#### Opción 2: Sistema Optimizado con DSPy GEPA
+
+El proyecto incluye un agente optimizado en el directorio `agent_gepa` que utiliza DSPy GEPA para mejorar automáticamente los prompts.
+
+**Paso 1: Instalar dependencias del agente optimizado**
+
+```bash
+cd agent_gepa
+uv sync
+cd ..
+```
+
+**Paso 2: (Opcional) Ejecutar optimización de prompts**
+
+Si quieres re-optimizar los prompts con tus propios datos:
+
+```bash
+cd agent_gepa
+uv run optimizer.py
+cd ..
+```
+
+Este proceso:
+- Utiliza GEPA (Genetic-Pareto) para evolucionar los prompts
+- Evalúa cada variante con métricas de calidad
+- Guarda el mejor modelo en `optimized_responder.json`
+- Toma aproximadamente 30 segundos con 5 ejemplos
+
+**Paso 3: Ejecutar el sistema optimizado**
+
+```bash
+npm run dev:gepa
+```
+
+Esto iniciará:
+- Frontend en `http://localhost:3000`
+- Backend optimizado en `http://localhost:8001`
+- Frontend automáticamente conectado al puerto 8001
+
+**Diferencias entre Sistema Base y Optimizado:**
+
+| Característica | Base (`agent/`) | Optimizado (`agent_gepa/`) |
+|---------------|-----------------|----------------------------|
+| **Prompts** | Estáticos | Optimizados con GEPA |
+| **Puerto** | 8000 | 8001 |
+| **Startup** | Rápido | Con caché: rápido |
+| **Calidad** | Buena | Mejorada automáticamente |
+| **Uso** | Desarrollo | Producción |
 
 ## 📁 Estructura del Proyecto
 
@@ -116,14 +167,20 @@ agui_test/
 ## 🔧 Scripts Disponibles
 
 ```bash
-# Desarrollo (frontend + backend juntos)
+# Desarrollo (frontend + backend base)
 npm run dev
+
+# Sistema optimizado (frontend + backend GEPA en puerto 8001)
+npm run dev:gepa
 
 # Solo frontend
 npm run dev:ui
 
-# Solo backend
+# Solo backend base (puerto 8000)
 npm run dev:agent
+
+# Solo backend optimizado (puerto 8001)
+npm run dev:agent:gepa
 
 # Build de producción
 npm run build
