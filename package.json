@@ -7,6 +7,8 @@
     "dev:all": "concurrently --kill-others \"npm run dev:ui\" \"npm run dev:agent\"",
     "dev:ui": "next dev",
     "dev:agent": "cd agent && uv run agent.py",
+    "dev:gepa": "concurrently --kill-others \"BACKEND_URL=http://localhost:8001 npm run dev:ui\" \"npm run dev:agent:gepa\"",
+    "dev:agent:gepa": "cd agent_gepa && PORT=8001 uv run agent.py",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

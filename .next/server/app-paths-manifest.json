@@ -1,5 +1,4 @@
 {
   "/api/copilotkit/route": "app/api/copilotkit/route.js",
-  "/_not-found/page": "app/_not-found/page.js",
   "/page": "app/page.js"
 }

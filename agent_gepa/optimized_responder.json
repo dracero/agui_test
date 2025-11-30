@@ -1,0 +1,44 @@
+{
+  "predict": {
+    "traces": [],
+    "train": [],
+    "demos": [],
+    "signature": {
+      "instructions": "Generates a helpful and educational response to a physics question based on retrieved documents.",
+      "fields": [
+        {
+          "prefix": "User Query:",
+          "description": "The user's original query."
+        },
+        {
+          "prefix": "Memory Context:",
+          "description": "Previous conversation context."
+        },
+        {
+          "prefix": "Classification:",
+          "description": "The classification of the query."
+        },
+        {
+          "prefix": "Retrieved Context:",
+          "description": "Relevant text fragments retrieved from documents."
+        },
+        {
+          "prefix": "Reasoning: Let's think step by step in order to",
+          "description": "${reasoning}"
+        },
+        {
+          "prefix": "Response:",
+          "description": "The final educational response."
+        }
+      ]
+    },
+    "lm": null
+  },
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.13",
+      "dspy": "3.0.4",
+      "cloudpickle": "3.1"
+    }
+  }
+}

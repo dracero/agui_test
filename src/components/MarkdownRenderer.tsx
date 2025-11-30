@@ -13,22 +13,23 @@ interface MarkdownRendererProps {
 
 export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
     return (
-        <div className="markdown-content">
+        <div className="markdown-content [&_code]:bg-gray-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-sm [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-base">
             <ReactMarkdown
                 remarkPlugins={[remarkMath]}
                 rehypePlugins={[rehypeKatex]}
                 components={{
                     // Customize code blocks
                     code({ node, inline, className, children, ...props }: any) {
-                        return inline ? (
-                            <code className="bg-gray-100 px-1 py-0.5 rounded text-sm" {...props}>
+                        return (
+                            <code className={className} {...props}>
                                 {children}
                             </code>
-                        ) : (
+                        );
+                    },
+                    pre({ children }) {
+                        return (
                             <pre className="bg-gray-100 p-3 rounded-lg overflow-x-auto my-2">
-                                <code className={className} {...props}>
-                                    {children}
-                                </code>
+                                {children}
                             </pre>
                         );
                     },

@@ -1,0 +1,17 @@
+python-dotenv>=1.0.0
+fastapi>=0.104.0
+ag-ui-adk>=0.1.0
+google-adk>=0.1.0
+pydantic>=2.0.0
+torch>=2.1.0
+transformers>=4.34.0
+qdrant-client>=1.6.0
+uvicorn>=0.24.0
+aiohttp>=3.9.0
+langchain>=0.1.0
+langchain-community>=0.1.0
+langchain-google-genai>=0.0.1
+langfuse>=2.0.0
+pypdf2>=3.0.0
+nest_asyncio>=1.5.0
+dspy-ai
