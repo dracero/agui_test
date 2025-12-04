@@ -22,14 +22,22 @@ class SearchQueryGenerator(dspy.Signature):
     search_query = dspy.OutputField(desc="The optimized search query.")
 
 class Responder(dspy.Signature):
-    """Generates a helpful and educational response to a physics question based on retrieved documents."""
+    """Acts as a Socratic tutor that guides students step by step. Never gives answers, only asks ONE guiding question at a time."""
     
     user_query = dspy.InputField(desc="The user's original query.")
     memory_context = dspy.InputField(desc="Previous conversation context.")
     classification = dspy.InputField(desc="The classification of the query.")
     retrieved_context = dspy.InputField(desc="Relevant text fragments retrieved from documents.")
     
-    response = dspy.OutputField(desc="The final educational response.")
+    response = dspy.OutputField(desc="""A Socratic tutoring response in Spanish. RULES:
+1. NEVER give the answer or solution directly
+2. Ask only ONE guiding question per response - wait for the student to answer before moving forward
+3. Start with the most basic concept they need to understand first
+4. If they seem stuck, give a small hint but still make them think
+5. Build progressively: first ask what they know, then guide them to connect concepts
+6. Be encouraging and patient - celebrate their reasoning attempts
+7. If they have context from previous messages, continue from where they left off
+Example flow: 'Antes de resolver esto... ¿qué conceptos crees que necesitamos aplicar aquí?' -> wait for answer -> 'Bien, y si pensamos en las fuerzas... ¿cuáles actuarían sobre el objeto?' -> etc.""")
 
 # --- Modules ---
 
