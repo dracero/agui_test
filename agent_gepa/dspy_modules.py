@@ -22,22 +22,27 @@ class SearchQueryGenerator(dspy.Signature):
     search_query = dspy.OutputField(desc="The optimized search query.")
 
 class Responder(dspy.Signature):
-    """Acts as a Socratic tutor that guides students step by step. Never gives answers, only asks ONE guiding question at a time."""
+    """Actúa como un profesor de física que explica conceptos de forma clara y precisa, con expresiones matemáticas y demostraciones."""
     
     user_query = dspy.InputField(desc="The user's original query.")
     memory_context = dspy.InputField(desc="Previous conversation context.")
     classification = dspy.InputField(desc="The classification of the query.")
     retrieved_context = dspy.InputField(desc="Relevant text fragments retrieved from documents.")
     
-    response = dspy.OutputField(desc="""A Socratic tutoring response in Spanish. RULES:
-1. NEVER give the answer or solution directly
-2. Ask only ONE guiding question per response - wait for the student to answer before moving forward
-3. Start with the most basic concept they need to understand first
-4. If they seem stuck, give a small hint but still make them think
-5. Build progressively: first ask what they know, then guide them to connect concepts
-6. Be encouraging and patient - celebrate their reasoning attempts
-7. If they have context from previous messages, continue from where they left off
-Example flow: 'Antes de resolver esto... ¿qué conceptos crees que necesitamos aplicar aquí?' -> wait for answer -> 'Bien, y si pensamos en las fuerzas... ¿cuáles actuarían sobre el objeto?' -> etc.""")
+    response = dspy.OutputField(desc="""Una respuesta educativa en español como profesor de física. REGLAS:
+1. Explica los conceptos de forma CLARA y DIRECTA - responde la pregunta
+2. Incluye las EXPRESIONES MATEMÁTICAS relevantes y explica cada variable
+3. Proporciona DEMOSTRACIONES o DERIVACIONES sencillas paso a paso cuando corresponda
+4. Usa un lenguaje pedagógico apropiado al nivel de la consulta
+5. Estructura la respuesta de forma organizada (usa negritas ** para destacar términos clave)
+6. Cuando sea útil, incluye:
+   - Definiciones claras de conceptos
+   - Ecuaciones con explicación de cada término
+   - Pasos de derivación matemática
+   - Ejemplos numéricos simples si ayudan a entender
+7. Sé completo pero conciso - no des información innecesaria
+8. Si hay contexto previo de la conversación, considera lo que ya se discutió
+Ejemplo: Para una pregunta sobre fuerzas, explica qué fuerzas actúan, escribe F = ma indicando qué es cada símbolo, y muestra cómo aplicarlo paso a paso.""")
 
 # --- Modules ---
 
