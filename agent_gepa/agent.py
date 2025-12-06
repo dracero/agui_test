@@ -1,4 +1,4 @@
-"""Asistente de Física I - UBA con AG-UI y ADK"""
+"""Asistente de Física I - UBA con AG-UI y ADK (Versión Optimizada con DSPy GEPA)"""
 
 from __future__ import annotations
 
@@ -30,23 +30,135 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from pydantic import BaseModel, ConfigDict
 from google.genai import types, Client
+
+# Imports de DSPy
 import dspy
-from dspy_modules import RAGModule
+try:
+    from .dspy_modules import RAGModule
+except ImportError:
+    # Fallback for when running directly inside the directory
+    from dspy_modules import RAGModule
 
 # Aplicar nest_asyncio para permitir loops anidados
 nest_asyncio.apply()
 
-# Mock observe decorator if langfuse is not configured or fails
+# ============================================================================
+# CONFIGURACIÓN OFFICAL DE LANGSMITH (OPENTELEMETRY)
+# ============================================================================
 try:
-    from langfuse import observe
-except ImportError:
-    def observe(*args, **kwargs):
+    from langsmith.integrations.otel import configure
+    from openinference.instrumentation.google_adk import GoogleADKInstrumentor
+    
+    # Configurar trazado automático
+    configure(
+        project_name=os.getenv("LANGCHAIN_PROJECT") or os.getenv("LANGSMITH_PROJECT") or "agente_fisica_gepa"
+    )
+    
+    # Instrumentar ADK
+    GoogleADKInstrumentor().instrument()
+    
+    from langsmith import traceable
+    print("✅ LangSmith configurado con OpenTelemetry")
+    LANGSMITH_ENABLED = True
+
+except ImportError as e:
+    print(f"⚠️ Error importando dependencias de OpenTelemetry: {e}")
+    LANGSMITH_ENABLED = False
+    
+    def traceable(*args, **kwargs):
         def decorator(func):
             return func
+        if len(args) == 1 and callable(args[0]):
+            return args[0]
         return decorator
 
+# ============================================================================
+# DECORADOR PERSONALIZADO PARA TODAS LAS ACCIONES
+# ============================================================================
+def medir_accion(nombre: str, tipo: str, extra_metadata: dict = None):
+    """
+    Decorador universal para medir todas las acciones del sistema.
+    
+    Args:
+        nombre: Nombre de la acción para trazabilidad
+        tipo: Tipo de acción (agente, busqueda, escritura_db, lectura_db, prompt, respuesta, procesamiento)
+        extra_metadata: Diccionario con metadata adicional
+    """
+    def decorator(func):
+        metadata = {
+            "action_type": tipo,
+            "function": func.__name__,
+            "module": func.__module__
+        }
+        if extra_metadata:
+            metadata.update(extra_metadata)
+        
+        @traceable(name=nombre, run_type="chain", metadata=metadata)
+        async def async_wrapper(*args, **kwargs):
+            inicio = time.time()
+            print(f"\n{'='*60}")
+            print(f"🎯 ACCIÓN: {nombre} | TIPO: {tipo}")
+            print(f"⏰ Inicio: {time.strftime('%H:%M:%S')}")
+            print(f"{'='*60}")
+            
+            try:
+                # Loguear inputs (sin exponer API keys)
+                inputs_log = {k: str(v)[:100] for k, v in kwargs.items() if not any(s in k.lower() for s in ['key', 'token', 'secret'])}
+                if inputs_log:
+                    print(f"📥 Inputs: {inputs_log}")
+                
+                result = await func(*args, **kwargs)
+                
+                tiempo = time.time() - inicio
+                print(f"✅ Éxito | ⏱️ Tiempo: {tiempo:.2f}s")
+                print(f"{'='*60}\n")
+                
+                return result
+            
+            except Exception as e:
+                tiempo = time.time() - inicio
+                print(f"❌ Error: {str(e)} | ⏱️ Tiempo: {tiempo:.2f}s")
+                print(f"{'='*60}\n")
+                raise
+        
+        @traceable(name=nombre, run_type="chain", metadata=metadata)
+        def sync_wrapper(*args, **kwargs):
+            inicio = time.time()
+            print(f"\n{'='*60}")
+            print(f"🎯 ACCIÓN: {nombre} | TIPO: {tipo}")
+            print(f"⏰ Inicio: {time.strftime('%H:%M:%S')}")
+            print(f"{'='*60}")
+            
+            try:
+                inputs_log = {k: str(v)[:100] for k, v in kwargs.items() if not any(s in k.lower() for s in ['key', 'token', 'secret'])}
+                if inputs_log:
+                    print(f"📥 Inputs: {inputs_log}")
+                
+                result = func(*args, **kwargs)
+                
+                tiempo = time.time() - inicio
+                print(f"✅ Éxito | ⏱️ Tiempo: {tiempo:.2f}s")
+                print(f"{'='*60}\n")
+                
+                return result
+            
+            except Exception as e:
+                tiempo = time.time() - inicio
+                print(f"❌ Error: {str(e)} | ⏱️ Tiempo: {tiempo:.2f}s")
+                print(f"{'='*60}\n")
+                raise
+        
+        # Retornar wrapper apropiado según tipo de función
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        else:
+            return sync_wrapper
+    
+    return decorator
+
+
 class AsistenteFisica:
-    """Clase unificada para el asistente de física con procesamiento de PDFs, RAG y memoria semántica usando Google ADK"""
+    """Clase unificada para el asistente de física con procesamiento de PDFs, RAG y memoria semántica usando Google ADK y DSPy GEPA"""
 
     def __init__(self):
         # Configurar APIs
@@ -54,7 +166,6 @@ class AsistenteFisica:
 
         # Inicializar componentes
         self.llm = None
-        self.adk_model = None
         self.rag_module = None
         self.memoria_semantica = None
         self.agents = {}
@@ -90,102 +201,8 @@ class AsistenteFisica:
         self._inicializar_modelo_embedding()
         print("✅ Todos los componentes inicializados")
 
-    ###
-    # Función auxiliar para obtener respuestas
-    async def _get_agent_response(self, agent, input_data):
-        """Función auxiliar para obtener respuesta de un agente ADK"""
-        try:
-            # Formatear el prompt para el agente
-            if isinstance(input_data, dict):
-                prompt = self._format_prompt_for_agent(agent.name, input_data)
-            else:
-                prompt = str(input_data)
-
-            # Método 1: Usar Runner.run() - La forma estándar en ADK
-            try:
-                # Crear runner con el agente
-                runner = Runner(agent)
-
-                # Ejecutar el agente con el prompt
-                response = await runner.run(prompt)
-
-                # Extraer la respuesta del objeto response
-                if hasattr(response, 'text'):
-                    return response.text
-                elif hasattr(response, 'content'):
-                    return response.content
-                elif hasattr(response, 'message'):
-                    return response.message
-                else:
-                    return str(response)
-
-            except Exception as runner_error:
-                print(f"Error con Runner.run(): {runner_error}")
-                
-                # Fallback manual
-                raise runner_error
-
-        except Exception as e:
-            print(f"Error ejecutando agente {agent.name}: {e}")
-
-            # Fallback: usar el modelo LLM directamente
-            try:
-                messages = [
-                    SystemMessage(content=getattr(agent, 'instruction', 'You are a helpful AI assistant.')),
-                    HumanMessage(content=prompt)
-                ]
-                response = self.llm.invoke(messages)
-                return response.content
-            except Exception as fallback_error:
-                print(f"Error en fallback para agente {agent.name}: {fallback_error}")
-                return None
-    ###
-
-    def _format_prompt_for_agent(self, agent_name, data):
-        """Formatear el prompt según el agente específico"""
-        if agent_name == "clasificador":
-            return f"""
-                    TEMARIO DE FÍSICA:
-                    {data.get('temario', '')}
-
-                    CONTEXTO DE CONVERSACIÓN PREVIA:
-                    {data.get('contexto_memoria', '')}
-
-                    CONSULTA DEL USUARIO:
-                    {data.get('consulta_usuario', '')}
-
-                    Clasifica esta consulta según el temario proporcionado.
-                    """
-        elif agent_name == "buscador":
-                                return f"""
-                    CLASIFICACIÓN:
-                    {data.get('clasificacion', '')}
-
-                    CONSULTA ORIGINAL:
-                    {data.get('consulta_original', '')}
-
-                    Genera la mejor consulta de búsqueda para esta información.
-                    """
-        elif agent_name == "respondedor":
-                                return f"""
-                    **CONSULTA ORIGINAL DEL USUARIO:**
-                    {data.get('consulta_usuario', '')}
-
-                    **CONTEXTO DE CONVERSACIÓN ANTERIOR:**
-                    {data.get('contexto_memoria', '')}
-
-                    **CLASIFICACIÓN TEMÁTICA:**
-                    {data.get('clasificacion', '')}
-
-                    **FRAGMENTOS DE DOCUMENTOS RELEVANTES:**
-                    {data.get('contexto_documentos', '')}
-
-                    Proporciona una respuesta completa y didáctica.
-                    """
-        return str(data)
-
     def _inicializar_modelos(self):
-        """Inicializar los modelos de lenguaje"""
+        """Inicializar los modelos de lenguaje (DSPy y LangChain)"""
         # Configuración común para Gemini
         gemini_config = {
             "model": "gemini-2.5-flash",
@@ -213,50 +230,32 @@ class AsistenteFisica:
         # Crear servicio de sesiones
         self.session_service = InMemorySessionService()
 
-        # Crear agentes ANTES del Runner
+        # Crear agentes
         self._crear_agentes()
-
-        # Crear runner principal (opcional, ya que usamos invoke directamente)
-        self.runner = Runner(
-            app_name="Asistente de Física",
-            agent=self.classifier_agent,
-            session_service=self.session_service
-        )
 
         print("✅ Componentes ADK inicializados")
 
     def _crear_agentes(self):
-        """Crear los agentes ADK y el módulo DSPy."""
+        """Crear el módulo RAG de DSPy y cargar pesos optimizados si existen."""
         
-        # Inicializar módulo DSPy
-        # Intentar cargar versión optimizada si existe
-        if os.path.exists("optimized_responder.json"):
+        self.rag_module = RAGModule()
+        
+        optimization_file = "optimized_responder.json"
+        if os.path.exists(optimization_file):
             try:
-                self.rag_module = RAGModule()
-                # Load optimized weights
-                self.rag_module.responder.load("optimized_responder.json") 
-                print("✅ Se cargó optimized_responder.json correctamente.")
+                # Intentar cargar la optimización
+                # Como guardamos self.rag_module.responder, cargamos ahí también
+                self.rag_module.responder.load(optimization_file)
+                print(f"✅ Se cargó la optimización GEPA desde '{optimization_file}'")
             except Exception as e:
-                print(f"Error cargando optimización: {e}")
-                self.rag_module = RAGModule()
+                print(f"⚠️ Error cargando optimización (usando default): {e}")
         else:
-            self.rag_module = RAGModule()
+             print("ℹ️ No se encontró 'optimized_responder.json', usando modelo base.")
 
-        # Mantenemos los agentes ADK como wrappers vacíos o simples para compatibilidad con el Runner si fuera necesario,
-        # pero el trabajo real lo hará DSPy.
+        # Creamos un agente ADK "dummy" o "wrapper" si fuera necesario para compatibilidad,
+        # pero para este flujo usaremos 'rag_module' directamente.
         
-        # Agente Clasificador (Placeholder para ADK)
-        self.classifier_agent = LlmAgent(
-            name="clasificador",
-            model="gemini-2.5-flash",
-            description="Agente DSPy Wrapper",
-            instruction="You are a wrapper."
-        )
-        
-        self.agents = {
-            'classifier': self.classifier_agent,
-        }
-        print("✅ Módulos DSPy inicializados")
+        print("✅ Módulo DSPy RAG inicializado")
 
     def _inicializar_modelo_embedding(self):
         """Inicializar el modelo de embeddings"""
@@ -275,7 +274,7 @@ class AsistenteFisica:
             print(f"Error al leer {nombre_archivo}: {e}")
             return ""
 
-    @observe(name="temario", as_type="generation")
+    @medir_accion("procesar_temario", "procesamiento", {"formato": "pdf"})
     def procesar_pdfs_temario(self, archivos_pdf):
         """Procesar PDFs para extraer el temario"""
         contenido_completo = ""
@@ -299,7 +298,7 @@ Tu tarea es responder preguntas sobre el temario que tiene en los archivos que l
 Responde solo con el contenido, si no está en el contenido di que no tienes eso en tu base de datos.
 Utiliza el siguiente contenido como referencia para tus respuestas:
 ---
-{self.contenido_completo}
+{self.contenido_completo[:5000]}... (truncado para evitar límite de tokens)
 ---
 """
 
@@ -312,23 +311,6 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
 
         ai_msg = self.llm.invoke(messages)
         self.temario = ai_msg.content
-
-        # Actualizar el temario en el agente clasificador
-        if hasattr(self, 'classifier_agent'):
-            self.classifier_agent.instruction = f"""Eres un agente especializado en clasificar consultas de física según el temario proporcionado.
-Debes proporcionar:
-1. El número y título del tema principal
-2. Los subtemas relevantes
-3. Palabras clave para búsqueda
-
-Formato de respuesta:
-TEMA: [número y título]
-SUBTEMAS: [lista]
-KEYWORDS: [palabras clave]
-
-TEMARIO DE FÍSICA:
-{self.temario}
-"""
 
         print("✅ Temario extraído correctamente")
         return self.temario
@@ -373,7 +355,19 @@ TEMARIO DE FÍSICA:
         await client.upsert(collection_name=self.collection_name, points=points, wait=True)
         print(f"{len(points)} chunks almacenados en Qdrant")
 
-    @observe(name="procesar_y_almacenar_pdfs", as_type="span")
+    async def check_qdrant_has_data(self):
+        """Verificar si la colección de Qdrant existe y tiene datos"""
+        try:
+            client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key)
+            collection_info = await client.get_collection(self.collection_name)
+            points_count = collection_info.points_count
+            print(f"ℹ️ Colección '{self.collection_name}' encontrada con {points_count} puntos")
+            return points_count > 0
+        except Exception as e:
+            print(f"ℹ️ Colección '{self.collection_name}' no existe o no se puede acceder: {e}")
+            return False
+
+    @medir_accion("almacenar_pdfs_qdrant", "escritura_db", {"db": "qdrant"})
     async def procesar_y_almacenar_pdfs(self, pdf_files):
         """Procesar PDFs y almacenar en Qdrant"""
         all_chunks = []
@@ -436,10 +430,12 @@ TEMARIO DE FÍSICA:
             json.dump(metadata_dict, f, ensure_ascii=False, indent=4)
         print("✅ Metadatos guardados en 'pdf_metadata.json'")
 
-    @observe(name="search_documents", as_type="span")
+    @medir_accion("busqueda_qdrant", "lectura_db", {"db": "qdrant"})
     async def search_documents(self, query, top_k=5):
         """Realizar búsqueda en Qdrant"""
         try:
+            # Actualizar contexto de Langfuse con la query
+            
             client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key)
 
             # Verificar conexión
@@ -483,7 +479,7 @@ TEMARIO DE FÍSICA:
                 with open("pdf_metadata.json", "r", encoding="utf-8") as f:
                     metadata = json.load(f)
 
-            for result in results:
+            for idx, result in enumerate(results):
                 meta = metadata.get(str(result.id), {})
                 payload = result.payload or {}
 
@@ -492,21 +488,45 @@ TEMARIO DE FÍSICA:
                     "texto": meta.get("chunk", payload.get("text", "Texto no disponible")),
                     "similitud": round(result.score, 4)
                 })
-
+                
             return formatted_results
 
         except Exception as e:
             error_msg = f"Error en la búsqueda: {str(e)}"
             print(f"❌ {error_msg}")
+
             return [{"pdf": "Error", "texto": error_msg, "similitud": 0}]
 
+    
+    # --- Helper methods for DSPy steps wrapped in medir_accion ---
+
+    @medir_accion("dspy_step_classify_and_search", "agente_dspy")
+    def _run_dspy_classify_search(self, syllabus, user_query, memory_context):
+        """Ejecuta el paso 1 de DSPy: Clasificación y Generación de Query"""
+        return self.rag_module.forward(
+            syllabus=syllabus,
+            memory_context=memory_context,
+            user_query=user_query
+        )
+
+    @medir_accion("dspy_step_generate_response", "agente_dspy")
+    def _run_dspy_generate_response(self, user_query, memory_context, classification, retrieved_context):
+        """Ejecuta el paso 3 de DSPy: Generación de respuesta"""
+        return self.rag_module.generate_response(
+            user_query=user_query,
+            memory_context=memory_context,
+            classification=classification,
+            retrieved_context=retrieved_context
+        )
+
     # Función de flujo corregida
-    @observe(name="iniciar_flujo_adk_corregido", as_type="span")
+    @medir_accion("flujo_adk_gepa", "pipeline", {"sistema": "dspy_gepa"})
     async def iniciar_flujo(self, consulta_usuario: str, user_id: str = "default_user"):
         """
-        Iniciar el flujo completo de procesamiento usando DSPy
+        Iniciar el flujo completo de procesamiento usando DSPy GEPA Optimizados
         """
         print(f"📝 Consulta recibida de '{user_id}': {consulta_usuario}")
+        
         trayectoria = []
         inicio_total = time.time()
 
@@ -514,29 +534,34 @@ TEMARIO DE FÍSICA:
         contexto_memoria = self.memoria_semantica.get_context()
 
         try:
-            # --- Paso 1 y 2: Clasificación y Generación de Búsqueda (DSPy) ---
+            # --- Paso 1: Clasificación y Generación de Búsqueda (DSPy) ---
             inicio_paso = time.time()
             
-            # Ejecutar módulo DSPy
-            prediction = self.rag_module(
+            # Llamada al módulo DSPy
+            dspy_prediction = self._run_dspy_classify_search(
                 syllabus=self.temario,
-                memory_context=contexto_memoria,
-                user_query=consulta_usuario
+                user_query=consulta_usuario,
+                memory_context=contexto_memoria
             )
             
-            clasificacion = prediction.classification
-            consulta_busqueda = prediction.search_query
+            clasificacion = dspy_prediction.classification
+            query_type = dspy_prediction.query_type
+            consulta_busqueda = dspy_prediction.search_query
             
-            tiempo_dspy_1 = time.time() - inicio_paso
-            
-            trayectoria.append({
-                "agente": "DSPy_Classify_Search",
-                "respuesta": f"Clasificación: {clasificacion} | Búsqueda: {consulta_busqueda}",
-                "tiempo": tiempo_dspy_1
-            })
-            print(f"✅ DSPy Clasificación y Búsqueda completadas en {tiempo_dspy_1:.2f}s")
+            tiempo_clasificacion = time.time() - inicio_paso
 
-            # --- Paso 3: Realizar búsqueda en Qdrant ---
+            trayectoria.append({
+                "agente": "DSPy_Classify",
+                "clasificacion": clasificacion,
+                "query_busqueda": consulta_busqueda,
+                "tiempo": tiempo_clasificacion
+            })
+            print(f"✅ Clasificación DSPy completada en {tiempo_clasificacion:.2f}s")
+            print(f"   Tipo: {query_type}")
+            print(f"   Búsqueda generada: {consulta_busqueda}")
+
+
+            # --- Paso 2: Realizar búsqueda en Qdrant (Reutiliza lógica robusta) ---
             inicio_paso = time.time()
             resultados_busqueda = await self.search_documents(consulta_busqueda)
             tiempo_busqueda = time.time() - inicio_paso
@@ -548,59 +573,58 @@ TEMARIO DE FÍSICA:
             })
             print(f"✅ Búsqueda en Qdrant completada en {tiempo_busqueda:.2f}s")
 
-            # --- Paso 4: Generar respuesta final (DSPy) ---
+
+            # --- Paso 3: Generar respuesta final (DSPy) ---
             inicio_paso = time.time()
             contexto_busqueda = "\n".join([
                 f"--- Fragmento {i} (PDF: {res['pdf']}) ---\n{res['texto']}"
                 for i, res in enumerate(resultados_busqueda, 1)
             ])
 
-            respuesta_final = self.rag_module.generate_response(
+            # Llamada al módulo DSPy
+            respuesta_final = self._run_dspy_generate_response(
                 user_query=consulta_usuario,
                 memory_context=contexto_memoria,
                 classification=clasificacion,
                 retrieved_context=contexto_busqueda
             )
-            
-            # Convertir a string si es un objeto Prediction
-            if hasattr(respuesta_final, 'response'):
-                respuesta_final = respuesta_final.response
-            else:
-                respuesta_final = str(respuesta_final)
 
             tiempo_respuesta = time.time() - inicio_paso
 
+            if respuesta_final is None:
+                raise Exception("La respuesta del agente respondedor es None")
+
             trayectoria.append({
-                "agente": "DSPy_Responder",
-                "respuesta": respuesta_final,
+                "agente": "DSPy_Response",
+                "respuesta_len": len(str(respuesta_final)),
                 "tiempo": tiempo_respuesta
             })
-            print(f"✅ Respuesta final generada en {tiempo_respuesta:.2f}s")
+            print(f"✅ Respuesta final GEPA generada en {tiempo_respuesta:.2f}s")
 
             # Actualizar la memoria con la nueva interacción
-            self.memoria_semantica.add_interaction(consulta_usuario, respuesta_final)
+            self.memoria_semantica.add_interaction(consulta_usuario, str(respuesta_final))
 
             tiempo_total = time.time() - inicio_total
             
             # Guardar la trayectoria
             try:
-                with open("trayectoria_adk.json", "w", encoding="utf-8") as f:
+                with open("trayectoria_gepa.json", "w", encoding="utf-8") as f:
                     json.dump(trayectoria, f, indent=4, ensure_ascii=False)
             except Exception:
                 pass
 
-            return respuesta_final
+            return str(respuesta_final)
 
         except Exception as e:
-            print(f"❌ Error en el flujo DSPy: {e}")
+            print(f"❌ Error en el flujo GEPA: {e}")
             import traceback
             traceback.print_exc()
 
             # Devolver una respuesta de fallback
-            fallback_response = f"Lo siento, hubo un error técnico al procesar tu consulta. Por favor, intenta de nuevo."
+            fallback_response = f"Lo siento, hubo un error técnico al procesar tu consulta (DSPy GEPA). Por favor, intenta de nuevo."
             return fallback_response
 
-    # Clase interna para memoria semántica
+    # Clase interna para memoria semántica (IDÉNTICA a agent.py)
     class SemanticMemory:
         def __init__(self, llm, max_entries=10):
             self.conversations = []
@@ -609,21 +633,18 @@ TEMARIO DE FÍSICA:
             self.direct_history = ""
             self.llm = llm
 
-            # Usar ChatMessageHistory en lugar de ConversationSummaryBufferMemory
+            # Usar ChatMessageHistory
             self.message_history = ChatMessageHistory()
 
         def add_interaction(self, query, response):
             """Añadir interacción a la memoria"""
-            # Añadir a la historia de mensajes
             self.message_history.add_user_message(query)
             self.message_history.add_ai_message(response)
             
-            # Guardar en registro de conversaciones
             self.conversations.append({"query": query, "response": response})
             if len(self.conversations) > self.max_entries:
                 self.conversations.pop(0)
 
-            # Mantener historial directo de las últimas 3 interacciones
             self.direct_history += f"\nUsuario: {query}\nAsistente: {response}\n"
             if len(self.conversations) > 3:
                 recent = self.conversations[-3:]
@@ -631,22 +652,17 @@ TEMARIO DE FÍSICA:
                 for conv in recent:
                     self.direct_history += f"\nUsuario: {conv['query']}\nAsistente: {conv['response']}\n"
 
-            # Actualizar resumen
             self.update_summary()
 
         def update_summary(self):
             """Actualizar resumen de la conversación"""
             try:
-                # Obtener los mensajes de la historia
                 messages = self.message_history.messages
                 
-                # Si hay muchos mensajes, generar un resumen usando el LLM
                 if len(messages) > 6:
-                    # Tomar los primeros mensajes para resumir
                     old_messages = messages[:-6]
                     recent_messages = messages[-6:]
                     
-                    # Crear prompt para resumir
                     conversation_text = "\n".join([
                         f"{'Usuario' if msg.type == 'human' else 'Asistente'}: {msg.content}"
                         for msg in old_messages
@@ -663,15 +679,13 @@ TEMARIO DE FÍSICA:
                     except Exception:
                         summary_text = "Conversación previa sobre física."
                     
-                    # Construir el contexto con resumen + mensajes recientes
                     recent_text = "\n".join([
                         f"{'Usuario' if msg.type == 'human' else 'Asistente'}: {msg.content}"
                         for msg in recent_messages
                     ])
                     
-                    self.summary = f"Resumen de conversación previa: {summary_text}\n\nInteracciones recientes:\n{recent_text}"
+                    self.summary = f"Resumen: {summary_text}\n\nRecientes:\n{recent_text}"
                 else:
-                    # Si hay pocos mensajes, simplemente mostrarlos todos
                     self.summary = f"Interacciones recientes:{self.direct_history}"
                     
             except Exception as e:
@@ -679,7 +693,7 @@ TEMARIO DE FÍSICA:
                 self.summary = f"Interacciones recientes:{self.direct_history}"
 
         def get_context(self):
-            """Obtener contexto actual de la conversación"""
+            """Obtener contexto actual"""
             return self.summary if self.summary.strip() else "No hay conversación previa."
 
 
@@ -687,55 +701,40 @@ TEMARIO DE FÍSICA:
 # CONFIGURACIÓN DE AG-UI y FASTAPI
 # ========================================
 
-# Instancia global del asistente
 asistente = AsistenteFisica()
 
-# Crear un agente personalizado que herede de LlmAgent
-
 class RAGAgent(LlmAgent):
-    """Agente personalizado que integra el flujo RAG completo"""
+    """Agente personalizado que integra el flujo RAG completo con DSPy GEPA"""
     
-    # Declarar asistente como un campo de Pydantic
     asistente: Any = None
-    
-    # Configurar el modelo para permitir tipos arbitrarios
     model_config = ConfigDict(arbitrary_types_allowed=True)
     
     def __init__(self, asistente_instance, **kwargs):
-        # Inicializar LlmAgent con configuración básica
         super().__init__(
-            name="asistente_fisica_rag",
+            name="asistente_fisica_gepa",
             model="gemini-2.5-flash",
-            description="Asistente de Física I de la UBA con sistema RAG completo",
-            instruction="""Eres un profesor experto en Física I de la Universidad de Buenos Aires.
-Ayudas a los estudiantes con sus consultas sobre física usando un sistema RAG que busca en documentos del curso.""",
+            description="Asistente de Física I de la UBA con sistema RAG optimizado con DSPy GEPA",
+            instruction="""Eres un profesor experto en Física I de la Universidad de Buenos Aires.""",
             asistente=asistente_instance,
             **kwargs
         )
     
     async def generate(self, prompt: str, **kwargs) -> str:
-        """
-        Método principal que procesa las consultas del usuario.
-        Este método es llamado por el Runner de ADK.
-        Sobrescribimos este método para usar nuestro flujo RAG personalizado.
-        """
+        """Método principal que procesa las consultas del usuario"""
         try:
-            # Procesar la consulta usando el flujo RAG completo
             respuesta = await self.asistente.iniciar_flujo(prompt, user_id="usuario_web")
             return respuesta
         except Exception as e:
             print(f"Error en RAGAgent.generate: {e}")
             import traceback
             traceback.print_exc()
-            return f"Lo siento, hubo un error al procesar tu consulta. Por favor, intenta de nuevo."
+            return f"Lo siento, hubo un error al procesar tu consulta."
 
-# Crear el agente RAG personalizado
 rag_agent = RAGAgent(asistente)
 
-# Crear instancia de ADK con AG-UI
 adk_fisica_agent = ADKAgent(
     adk_agent=rag_agent,
-    app_name="fisica_uba_app",
+    app_name="fisica_uba_app_gepa",
     user_id="estudiante_fisica",
     session_timeout_seconds=7200,
     use_in_memory_services=True
@@ -744,63 +743,72 @@ adk_fisica_agent = ADKAgent(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Gestión del ciclo de vida de la aplicación"""
-    # Startup
-    print("🚀 Iniciando Asistente de Física...")
+    print("🚀 Iniciando Asistente de Física (GEPA Optimized)...")
     asistente.inicializar_componentes()
 
-    # Procesar PDFs para extraer temario
-    dir_pdf = os.getenv("DIR_PDF", "./pdfs")  # Usar variable de entorno o directorio por defecto
-    archivos_pdf = []
-    
-    if os.path.exists(dir_pdf):
-        archivos_pdf = [
-            os.path.join(dir_pdf, f) 
-            for f in os.listdir(dir_pdf) 
-            if f.lower().endswith('.pdf')
-        ]
-        print(f"📁 Directorio de PDFs: {dir_pdf}")
-        print(f"📚 Encontrados {len(archivos_pdf)} archivos PDF")
-    else:
-        print(f"⚠️ Directorio de PDFs no encontrado: {dir_pdf}")
-    
-    if archivos_pdf:
-        # Check if we already processed these files
-        if os.path.exists("pdf_metadata.json"):
-            print("ℹ️ Se encontró 'pdf_metadata.json'. Saltando procesamiento de PDFs para acelerar inicio.")
-            # Load syllabus if needed, or assume it's fine. 
-            # Ideally we should load the syllabus from a file too, but for now we just skip the heavy embedding part.
-            # We still might want to extract the syllabus if it's fast, but let's assume it's part of the slow process.
-            # Actually, procesar_pdfs_temario is fast (LLM call but one file?), procesar_y_almacenar_pdfs is slow (embeddings).
-            # Let's keep procesar_pdfs_temario if it's important for the agent's context, 
-            # but definitely skip procesar_y_almacenar_pdfs.
-            
-            # For now, let's just run procesar_pdfs_temario (it populates self.temario) 
-            # and skip the embedding part.
-            asistente.procesar_pdfs_temario(archivos_pdf)
-        else:
-            asistente.procesar_pdfs_temario(archivos_pdf)
-            await asistente.procesar_y_almacenar_pdfs(archivos_pdf)
-    else:
-        print("ℹ️ No se encontraron archivos PDF locales. Se usará la base de datos existente.")
-        
-    yield
-    # Shutdown
-    print("👋 Apagando Asistente de Física...")
+    # Verificar si Qdrant ya tiene datos
+    try:
+        # has_data = await asistente.check_qdrant_has_data()
+        # if has_data:
+        #     print("✅ Qdrant ya contiene datos. (Verificando nuevos PDFs...)")
 
-# Crear aplicación FastAPI
+        dir_pdf = os.getenv("DIR_PDF", "./pdfs")
+        archivos_pdf = []
+        
+        if os.path.exists(dir_pdf):
+            archivos_pdf = [
+                os.path.join(dir_pdf, f) 
+                for f in os.listdir(dir_pdf) 
+                if f.lower().endswith('.pdf')
+            ]
+        
+        if archivos_pdf:
+            try:
+                print(f"📖 Procesando {len(archivos_pdf)} archivos PDF en '{dir_pdf}'...")
+                asistente.procesar_pdfs_temario(archivos_pdf)
+                await asistente.procesar_y_almacenar_pdfs(archivos_pdf)
+                print("✅ PDFs procesados y cargados exitosamente (Sobrescribiendo/Actualizando)")
+            except Exception as e:
+                print(f"❌ Error al procesar PDFs: {e}")
+                import traceback
+                traceback.print_exc()
+                if not asistente.temario:
+                    asistente.temario = "Física I - UBA (Error al cargar PDFs)"
+        else:
+            print(f"ℹ️ No se encontraron archivos PDF en '{dir_pdf}'. Se usará conocimiento existente en Qdrant o del modelo.")
+            try:
+                has_data = await asistente.check_qdrant_has_data()
+                if has_data:
+                    # Intentar cargar temario de metadatos o generarlo genérico
+                    asistente.temario = "Física I - UBA (Datos en Qdrant)"
+                    print("✅ Se detectaron datos previos en Qdrant.")
+                else:
+                    asistente.temario = "Física I - UBA (Sin datos)"
+            except:
+                pass
+
+    except Exception as e:
+        print(f"❌ Error durante la inicialización: {e}")
+        import traceback
+        traceback.print_exc()
+        asistente.temario = "Física I - UBA"
+    
+    print("✅ Backend GEPA listo")
+    yield
+    print("👋 Apagando Asistente...")
+
 app = FastAPI(
-    title="Asistente de Física I - UBA",
-    description="Sistema RAG con agentes ADK para consultas de física",
-    version="1.0.0",
+    title="Asistente de Física I - GEPA",
+    description="Sistema RAG con optimización DSPy GEPA",
+    version="2.0.0",
     lifespan=lifespan
 )
 
-# Agregar el endpoint de ADK
 add_adk_fastapi_endpoint(app, adk_fisica_agent, path="/")
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "agent": "AsistenteFisica"}
+    return {"status": "healthy", "agent": "AsistenteFisicaGEPA"}
 
 if __name__ == "__main__":
     import uvicorn

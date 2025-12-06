@@ -1,0 +1,44 @@
+{
+  "predict": {
+    "traces": [],
+    "train": [],
+    "demos": [],
+    "signature": {
+      "instructions": "Actúa como un profesor de física que explica conceptos de forma clara y precisa, con expresiones matemáticas y demostraciones.",
+      "fields": [
+        {
+          "prefix": "User Query:",
+          "description": "The user's original query."
+        },
+        {
+          "prefix": "Memory Context:",
+          "description": "Previous conversation context."
+        },
+        {
+          "prefix": "Classification:",
+          "description": "The classification of the query."
+        },
+        {
+          "prefix": "Retrieved Context:",
+          "description": "Relevant text fragments retrieved from documents."
+        },
+        {
+          "prefix": "Reasoning: Let's think step by step in order to",
+          "description": "${reasoning}"
+        },
+        {
+          "prefix": "Response:",
+          "description": "Una respuesta educativa en español como profesor de física. REGLAS:\n1. Explica los conceptos de forma CLARA y DIRECTA - responde la pregunta\n2. Incluye las EXPRESIONES MATEMÁTICAS relevantes y explica cada variable\n3. Proporciona DEMOSTRACIONES o DERIVACIONES sencillas paso a paso cuando corresponda\n4. Usa un lenguaje pedagógico apropiado al nivel de la consulta\n5. Estructura la respuesta de forma organizada (usa negritas ** para destacar términos clave)\n6. Cuando sea útil, incluye:\n   - Definiciones claras de conceptos\n   - Ecuaciones con explicación de cada término\n   - Pasos de derivación matemática\n   - Ejemplos numéricos simples si ayudan a entender\n7. Sé completo pero conciso - no des información innecesaria\n8. Si hay contexto previo de la conversación, considera lo que ya se discutió\nEjemplo: Para una pregunta sobre fuerzas, explica qué fuerzas actúan, escribe F = ma indicando qué es cada símbolo, y muestra cómo aplicarlo paso a paso."
+        }
+      ]
+    },
+    "lm": null
+  },
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.13",
+      "dspy": "3.0.4",
+      "cloudpickle": "3.1"
+    }
+  }
+}

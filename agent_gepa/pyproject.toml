@@ -20,4 +20,5 @@ dependencies = [
     "langchain-google-genai>=0.0.1",
     "langchain-community>=0.1.0",
     "pypdf2>=3.0.0",
+    "langfuse>=3.10.5",
 ]

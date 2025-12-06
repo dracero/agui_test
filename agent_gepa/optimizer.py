@@ -142,6 +142,7 @@ class FullRAGPipeline(dspy.Module):
             user_query=user_query
         )
         
+        query_type = prediction.query_type
         classification = prediction.classification
         search_query = prediction.search_query
         
@@ -157,6 +158,7 @@ class FullRAGPipeline(dspy.Module):
         )
         
         return dspy.Prediction(
+            query_type=query_type,
             classification=classification,
             search_query=search_query,
             retrieved_context=retrieved_context,
@@ -247,29 +249,56 @@ def optimize_agent():
     print("📦 Initializing Full RAG Pipeline...")
     student = FullRAGPipeline(syllabus=syllabus)
     
-    # 2. Training examples - only user_query and expected response
-    # The system will fetch real context from Qdrant
+    # 2. Training examples - diverse mix of exercises and conceptual questions
+    # The system will fetch real context from Qdrant and automatically classify query type
     # PROFESOR DE FÍSICA - Explicaciones claras, con expresiones matemáticas y demostraciones
     trainset = [
+        # EJERCICIO: Problema de plano inclinado con rozamiento
         dspy.Example(
             user_query="Un bloque de masa m baja por un plano inclinado con rozamiento. ¿Cuáles son las fuerzas que actúan y cómo planteo la segunda ley de Newton?",
             response="¡Excelente pregunta! En este sistema actúan tres fuerzas sobre el bloque:\n\n1. **Peso (W)**: Apunta verticalmente hacia abajo con magnitud W = mg, donde g es la aceleración de gravedad.\n2. **Normal (N)**: Perpendicular al plano inclinado.\n3. **Fuerza de rozamiento (fr)**: Paralela al plano, oponiéndose al movimiento.\n\nPara aplicar la segunda ley de Newton (F = ma), es conveniente usar un sistema de coordenadas rotado con el eje x paralelo al plano:\n\n**Descomposición del peso:**\n- Componente paralela: Wx = mg·sen(θ)\n- Componente perpendicular: Wy = mg·cos(θ)\n\n**Ecuaciones de movimiento:**\n- Eje x: mg·sen(θ) - fr = ma\n- Eje y: N - mg·cos(θ) = 0\n\nDonde fr = μN (μ es el coeficiente de fricción). De la segunda ecuación: N = mg·cos(θ), sustituyendo:\n\n**ma = mg·sen(θ) - μmg·cos(θ)**\n\nSimplificando: **a = g(sen(θ) - μcos(θ))**"
         ).with_inputs("user_query"),
+        
+        # CONCEPTUAL: Diferencia entre tipos de ondas
         dspy.Example(
             user_query="¿Cuál es la diferencia entre una onda transversal y una longitudinal?",
             response="La diferencia fundamental está en la **dirección de oscilación** de las partículas del medio respecto a la dirección de propagación de la onda:\n\n**Onda Transversal:**\n- Las partículas oscilan perpendicular (⊥) a la dirección de propagación\n- Ejemplo: ondas en una cuerda, luz, ondas en agua\n- Tiene crestas y valles claramente definidos\n- Representación matemática: y(x,t) = A·sen(kx - ωt), donde y es el desplazamiento perpendicular\n\n**Onda Longitudinal:**\n- Las partículas oscilan paralela (∥) a la dirección de propagación\n- Ejemplo: sonido, ondas sísmicas P\n- Tiene compresiones y rarefacciones\n- Las partículas se comprimen y expanden en la misma dirección del movimiento de la onda\n\n**Parámetros comunes:**\nAmbas tienen: velocidad v = λf (donde λ es longitud de onda y f frecuencia), amplitud A, y pueden expresarse con la ecuación de onda general."
         ).with_inputs("user_query"),
+        
+        # CONCEPTUAL: Ley de Snell y reflexión total
         dspy.Example(
             user_query="Explica la ley de Snell y qué sucede cuando la luz pasa de un medio con mayor índice de refracción a uno menor.",
             response="La **Ley de Snell** describe cómo cambia la dirección de un rayo de luz al pasar entre dos medios con diferentes índices de refracción:\n\n**n₁·sen(θ₁) = n₂·sen(θ₂)**\n\nDonde:\n- n₁, n₂: índices de refracción de los medios 1 y 2\n- θ₁, θ₂: ángulos de incidencia y refracción (medidos desde la normal)\n\nEl índice de refracción n = c/v, donde c es la velocidad de la luz en el vacío y v en el medio.\n\n**Caso específico n₁ > n₂ (por ejemplo, agua → aire):**\n\nDe la ley de Snell: sen(θ₂) = (n₁/n₂)·sen(θ₁)\n\nComo n₁ > n₂, entonces (n₁/n₂) > 1, por lo que θ₂ > θ₁.\n\n**Resultado:** El rayo se **aleja de la normal**.\n\n**Ángulo crítico:** Existe un θc = arcsen(n₂/n₁) tal que si θ₁ > θc, ocurre **reflexión total interna** (el rayo no se transmite, solo se refleja). Este fenómeno es la base de las fibras ópticas."
         ).with_inputs("user_query"),
+        
+        # EJERCICIO: Cálculo de centro de masa
         dspy.Example(
-            user_query="¿Cómo se calcula el centro de masa de un sistema de partículas?",
-            response="El **centro de masa** es el punto donde se puede considerar concentrada toda la masa del sistema. Su posición se calcula como el promedio ponderado de las posiciones de todas las partículas:\n\n**Para un sistema de N partículas:**\n\n**R_cm = (Σ mᵢ·rᵢ) / M_total**\n\nDonde:\n- rᵢ: vector posición de la partícula i\n- mᵢ: masa de la partícula i\n- M_total = Σ mᵢ: masa total del sistema\n\n**En componentes cartesianas:**\n- x_cm = (m₁x₁ + m₂x₂ + ... + mₙxₙ) / M_total\n- y_cm = (m₁y₁ + m₂y₂ + ... + mₙyₙ) / M_total\n- z_cm = (m₁z₁ + m₂z₂ + ... + mₙzₙ) / M_total\n\n**Ejemplo práctico:** Dos masas m₁=2kg en x=0 y m₂=3kg en x=5m:\nx_cm = (2·0 + 3·5)/(2+3) = 15/5 = 3m\n\nEl centro de masa está más cerca de la masa mayor, como esperábamos intuitivamente."
+            user_query="Calcula el centro de masa de tres partículas: m₁=2kg en (0,0), m₂=3kg en (4,0), y m₃=1kg en (2,3).",
+            response="Para calcular el centro de masa usamos la fórmula del promedio ponderado de las posiciones:\n\n**R_cm = (Σ mᵢ·rᵢ) / M_total**\n\n**Datos:**\n- m₁ = 2kg en (0, 0)\n- m₂ = 3kg en (4, 0)\n- m₃ = 1kg en (2, 3)\n- M_total = 2 + 3 + 1 = 6kg\n\n**Componente x:**\nx_cm = (m₁·x₁ + m₂·x₂ + m₃·x₃) / M_total\nx_cm = (2·0 + 3·4 + 1·2) / 6\nx_cm = (0 + 12 + 2) / 6 = 14/6 = **2.33 m**\n\n**Componente y:**\ny_cm = (m₁·y₁ + m₂·y₂ + m₃·y₃) / M_total\ny_cm = (2·0 + 3·0 + 1·3) / 6\ny_cm = 3/6 = **0.5 m**\n\n**Resultado:** El centro de masa está en **(2.33, 0.5) m**\n\nNota que está más cerca de m₂ porque es la masa más grande del sistema."
         ).with_inputs("user_query"),
+        
+        # CONCEPTUAL: Definición de momento de inercia
         dspy.Example(
-            user_query="Define el momento de inercia.",
-            response="El **momento de inercia (I)** es la medida de la resistencia de un cuerpo a cambiar su velocidad angular. Es el análogo rotacional de la masa en el movimiento lineal.\n\n**Definición matemática:**\n\n**I = Σ mᵢ·rᵢ²** (para partículas discretas)\n**I = ∫ r²·dm** (para cuerpos continuos)\n\nDonde:\n- mᵢ: masa del elemento i\n- rᵢ: distancia perpendicular del elemento al eje de rotación\n- dm: elemento infinitesimal de masa\n\n**Analogía con movimiento lineal:**\n- Lineal: F = ma → Energía cinética = ½mv²\n- Rotacional: τ = Iα → Energía cinética = ½Iω²\n\n**Ejemplos de momentos de inercia:**\n- Cilindro sólido (eje central): I = ½MR²\n- Esfera sólida (eje por centro): I = ⅖MR²\n- Varilla delgada (eje por extremo): I = ⅓ML²\n\n**Propiedad clave:** El momento de inercia depende NO SOLO de la masa, sino también de cómo está distribuida respecto al eje de rotación. Por eso objetos de igual masa pueden tener diferentes momentos de inercia."
+            user_query="¿Qué es el momento de inercia y por qué depende de cómo está distribuida la masa?",
+            response="El **momento de inercia (I)** es la medida de la resistencia de un cuerpo a cambiar su velocidad angular. Es el análogo rotacional de la masa en el movimiento lineal.\n\n**Definición matemática:**\n\n**I = Σ mᵢ·rᵢ²** (para partículas discretas)\n**I = ∫ r²·dm** (para cuerpos continuos)\n\nDonde rᵢ es la **distancia perpendicular** del elemento de masa al eje de rotación.\n\n**¿Por qué depende de la distribución de masa?**\n\nObserva que cada elemento de masa se multiplica por r², no solo por r. Esto significa que la masa lejos del eje contribuye MUCHO más al momento de inercia que la masa cerca del eje.\n\n**Ejemplo ilustrativo:**\nConsideremos dos varillas de igual masa M y longitud L:\n1. Eje por el centro: I = (1/12)ML²\n2. Eje por un extremo: I = (1/3)ML²\n\nLa segunda tiene el triple de momento de inercia porque la masa promedio está más lejos del eje de rotación.\n\n**Analogía física:**\n- En rotación: τ = Iα (torque = momento de inercia × aceleración angular)\n- En traslación: F = ma (fuerza = masa × aceleración lineal)\n\nAsí como objetos más masivos son más difíciles de acelerar linealmente, objetos con mayor momento de inercia son más difíciles de acelerar angularmente."
+        ).with_inputs("user_query"),
+        
+        # EJERCICIO: Energía cinética rotacional
+        dspy.Example(
+            user_query="Un disco sólido de masa 2kg y radio 0.3m gira a 10 rad/s. ¿Cuál es su energía cinética rotacional?",
+            response="Para calcular la energía cinética rotacional usamos:\n\n**E_rot = ½Iω²**\n\n**Paso 1: Determinar el momento de inercia**\n\nPara un disco sólido rotando sobre su eje central:\n**I = ½MR²**\n\nCon M = 2kg y R = 0.3m:\nI = ½ × 2 × (0.3)²\nI = 1 × 0.09 = **0.09 kg·m²**\n\n**Paso 2: Calcular la energía cinética**\n\nCon ω = 10 rad/s:\nE_rot = ½ × I × ω²\nE_rot = ½ × 0.09 × (10)²\nE_rot = ½ × 0.09 × 100\nE_rot = **4.5 J**\n\n**Resultado:** La energía cinética rotacional del disco es **4.5 Joules**.\n\nNota: Esta fórmula es análoga a E = ½mv² para movimiento lineal, donde I reemplaza a m y ω reemplaza a v."
+        ).with_inputs("user_query"),
+        
+        # CONCEPTUAL: Principio de conservación del momento angular
+        dspy.Example(
+            user_query="¿Qué es el momento angular y cuándo se conserva?",
+            response="El **momento angular (L)** es la cantidad de movimiento rotacional de un objeto. Es el análogo rotacional del momento lineal (p = mv).\n\n**Definición matemática:**\n\nPara una partícula: **L = r × p = m(r × v)**\nPara un cuerpo rígido: **L = Iω**\n\nDonde:\n- r: vector posición desde el eje\n- p: momento lineal\n- I: momento de inercia\n- ω: velocidad angular\n\n**Conservación del momento angular:**\n\nEl momento angular se conserva cuando el **torque externo neto es cero**:\n\n**Si τ_ext = 0 → L = constante**\n\nEsto es análogo a la conservación del momento lineal cuando F_ext = 0.\n\n**Ejemplos prácticos:**\n\n1. **Patinador en hielo:** Al recoger los brazos, disminuye I. Como L = Iω se conserva, ω aumenta (gira más rápido).\n\n2. **Planeta orbitando:** El torque gravitacional es cero porque la fuerza apunta hacia el centro. Por eso L se conserva y se cumple la segunda ley de Kepler (áreas iguales en tiempos iguales).\n\n3. **Giroscopio:** Mantiene su orientación porque L se conserva en ausencia de torques externos.\n\n**Relación con torque:**\nτ = dL/dt (el torque es la razón de cambio del momento angular, análogo a F = dp/dt)"
+        ).with_inputs("user_query"),
+        
+        # EJERCICIO: Colisión elástica unidimensional
+        dspy.Example(
+            user_query="Dos bolas chocan elásticamente. La bola 1 (m₁=2kg, v₁=3m/s) golpea a la bola 2 (m₂=1kg, v₂=0). ¿Cuáles son sus velocidades finales?",
+            response="En una **colisión elástica** se conservan tanto el momento lineal como la energía cinética.\n\n**Datos:**\n- m₁ = 2kg, v₁ᵢ = 3m/s\n- m₂ = 1kg, v₂ᵢ = 0m/s\n\n**Ecuaciones de conservación:**\n\n1. **Momento lineal:** m₁v₁ᵢ + m₂v₂ᵢ = m₁v₁f + m₂v₂f\n2. **Energía cinética:** ½m₁v₁ᵢ² + ½m₂v₂ᵢ² = ½m₁v₁f² + ½m₂v₂f²\n\n**Fórmulas para colisión elástica 1D:**\n\nv₁f = [(m₁-m₂)v₁ᵢ + 2m₂v₂ᵢ] / (m₁+m₂)\nv₂f = [(m₂-m₁)v₂ᵢ + 2m₁v₁ᵢ] / (m₁+m₂)\n\n**Sustituyendo valores:**\n\nv₁f = [(2-1)×3 + 2×1×0] / (2+1)\nv₁f = [3 + 0] / 3 = **1 m/s**\n\nv₂f = [(1-2)×0 + 2×2×3] / (2+1)\nv₂f = [0 + 12] / 3 = **4 m/s**\n\n**Resultado:**\n- Bola 1: v₁f = **1 m/s** (se desacelera)\n- Bola 2: v₂f = **4 m/s** (sale rápido)\n\n**Verificación:**\n- Momento inicial: 2×3 + 1×0 = 6 kg·m/s\n- Momento final: 2×1 + 1×4 = 6 kg·m/s ✓\n- Energía inicial: ½×2×9 = 9 J\n- Energía final: ½×2×1 + ½×1×16 = 1 + 8 = 9 J ✓"
         ).with_inputs("user_query"),
     ]
     

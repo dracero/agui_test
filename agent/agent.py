@@ -34,14 +34,129 @@ from google.genai import types, Client
 # Aplicar nest_asyncio para permitir loops anidados
 nest_asyncio.apply()
 
-# Mock observe decorator if langfuse is not configured or fails
+# ============================================================================
+# CONFIGURACIÓN OFFICAL DE LANGSMITH (OPENTELEMETRY)
+# ============================================================================
 try:
-    from langfuse import observe
-except ImportError:
-    def observe(*args, **kwargs):
+    from langsmith.integrations.otel import configure
+    from openinference.instrumentation.google_adk import GoogleADKInstrumentor
+    
+    # Configurar trazado automático
+    configure(
+        project_name=os.getenv("LANGCHAIN_PROJECT") or os.getenv("LANGSMITH_PROJECT") or "agente_fisica_adk"
+    )
+    
+    # Instrumentar ADK
+    GoogleADKInstrumentor().instrument()
+    
+    from langsmith import traceable
+    print("✅ LangSmith configurado con OpenTelemetry")
+    LANGSMITH_ENABLED = True
+
+except ImportError as e:
+    print(f"⚠️ Error importando dependencias de OpenTelemetry: {e}")
+    print("💡 Asegúrate de instalar: opentelemetry-sdk opentelemetry-exporter-otlp openinference-instrumentation-google-adk langsmith[otel]")
+    LANGSMITH_ENABLED = False
+    
+    def traceable(*args, **kwargs):
         def decorator(func):
             return func
+        if len(args) == 1 and callable(args[0]):
+            return args[0]
         return decorator
+
+# Imports de DSPy
+import dspy
+try:
+    from .dspy_modules import RAGModule
+except ImportError:
+    # Fallback for when running directly
+    from dspy_modules import RAGModule
+
+# ============================================================================
+# DECORADOR PERSONALIZADO PARA TODAS LAS ACCIONES
+# ============================================================================
+def medir_accion(nombre: str, tipo: str, extra_metadata: dict = None):
+    """
+    Decorador universal para medir todas las acciones del sistema.
+    
+    Args:
+        nombre: Nombre de la acción para trazabilidad
+        tipo: Tipo de acción (agente, busqueda, escritura_db, lectura_db, prompt, respuesta, procesamiento)
+        extra_metadata: Diccionario con metadata adicional
+    """
+    def decorator(func):
+        metadata = {
+            "action_type": tipo,
+            "function": func.__name__,
+            "module": func.__module__
+        }
+        if extra_metadata:
+            metadata.update(extra_metadata)
+        
+        @traceable(name=nombre, run_type="chain", metadata=metadata)
+        async def async_wrapper(*args, **kwargs):
+            inicio = time.time()
+            print(f"\n{'='*60}")
+            print(f"🎯 ACCIÓN: {nombre} | TIPO: {tipo}")
+            print(f"⏰ Inicio: {time.strftime('%H:%M:%S')}")
+            print(f"{'='*60}")
+            
+            try:
+                # Loguear inputs (sin exponer API keys)
+                inputs_log = {k: str(v)[:100] for k, v in kwargs.items() if not any(s in k.lower() for s in ['key', 'token', 'secret'])}
+                if inputs_log:
+                    print(f"📥 Inputs: {inputs_log}")
+                
+                result = await func(*args, **kwargs)
+                
+                tiempo = time.time() - inicio
+                print(f"✅ Éxito | ⏱️ Tiempo: {tiempo:.2f}s")
+                print(f"{'='*60}\n")
+                
+                return result
+            
+            except Exception as e:
+                tiempo = time.time() - inicio
+                print(f"❌ Error: {str(e)} | ⏱️ Tiempo: {tiempo:.2f}s")
+                print(f"{'='*60}\n")
+                raise
+        
+        @traceable(name=nombre, run_type="chain", metadata=metadata)
+        def sync_wrapper(*args, **kwargs):
+            inicio = time.time()
+            print(f"\n{'='*60}")
+            print(f"🎯 ACCIÓN: {nombre} | TIPO: {tipo}")
+            print(f"⏰ Inicio: {time.strftime('%H:%M:%S')}")
+            print(f"{'='*60}")
+            
+            try:
+                inputs_log = {k: str(v)[:100] for k, v in kwargs.items() if not any(s in k.lower() for s in ['key', 'token', 'secret'])}
+                if inputs_log:
+                    print(f"📥 Inputs: {inputs_log}")
+                
+                result = func(*args, **kwargs)
+                
+                tiempo = time.time() - inicio
+                print(f"✅ Éxito | ⏱️ Tiempo: {tiempo:.2f}s")
+                print(f"{'='*60}\n")
+                
+                return result
+            
+            except Exception as e:
+                tiempo = time.time() - inicio
+                print(f"❌ Error: {str(e)} | ⏱️ Tiempo: {tiempo:.2f}s")
+                print(f"{'='*60}\n")
+                raise
+        
+        # Retornar wrapper apropiado según tipo de función
+        if asyncio.iscoroutinefunction(func):
+            return async_wrapper
+        else:
+            return sync_wrapper
+    
+    return decorator
+
 
 class AsistenteFisica:
     """Clase unificada para el asistente de física con procesamiento de PDFs, RAG y memoria semántica usando Google ADK"""
@@ -89,6 +204,7 @@ class AsistenteFisica:
 
     ###
     # Función auxiliar para obtener respuestas
+    @medir_accion("agent_response", "agente")
     async def _get_agent_response(self, agent, input_data):
         """Función auxiliar para obtener respuesta de un agente ADK"""
         try:
@@ -97,6 +213,7 @@ class AsistenteFisica:
                 prompt = self._format_prompt_for_agent(agent.name, input_data)
             else:
                 prompt = str(input_data)
+            
 
             # Método 1: Usar Runner.run() - La forma estándar en ADK
             try:
@@ -108,13 +225,16 @@ class AsistenteFisica:
 
                 # Extraer la respuesta del objeto response
                 if hasattr(response, 'text'):
-                    return response.text
+                    result = response.text
                 elif hasattr(response, 'content'):
-                    return response.content
+                    result = response.content
                 elif hasattr(response, 'message'):
-                    return response.message
+                    result = response.message
                 else:
-                    return str(response)
+                    result = str(response)
+                
+                # Actualizar contexto con la respuesta
+                return result
 
             except Exception as runner_error:
                 print(f"Error con Runner.run(): {runner_error}")
@@ -132,6 +252,7 @@ class AsistenteFisica:
                     HumanMessage(content=prompt)
                 ]
                 response = self.llm.invoke(messages)
+                
                 return response.content
             except Exception as fallback_error:
                 print(f"Error en fallback para agente {agent.name}: {fallback_error}")
@@ -191,8 +312,23 @@ class AsistenteFisica:
             "max_output_tokens": None,
         }
 
-        # LLM para LangChain (para compatibilidad con memoria)
+        # 1. Configurar LLM para LangChain (para compatibilidad con memoria)
         self.llm = ChatGoogleGenerativeAI(**gemini_config)
+
+        # 2. Configurar DSPy
+        try:
+            # Check if dspy.Google exists (compatibility)
+            if hasattr(dspy, 'Google'):
+                lm = dspy.Google("models/gemini-2.0-flash", api_key=os.getenv("GOOGLE_API_KEY"))
+            else:
+                lm = dspy.LM("models/gemini-2.0-flash", api_key=os.getenv("GOOGLE_API_KEY"))
+            
+            dspy.settings.configure(lm=lm)
+            print(f"✅ DSPy configurado correctamente.")
+        except Exception as e:
+            print(f"❌ Error configurando DSPy: {e}")
+            # No fallar completamente, permitir que el resto de componentes carguen
+            # aunque el flujo GEPA podría fallar luego si se invoca.
 
         print("✅ Modelos inicializados")
 
@@ -210,68 +346,74 @@ class AsistenteFisica:
         self._crear_agentes()
 
         # Crear runner principal (opcional, ya que usamos invoke directamente)
-        self.runner = Runner(
-            app_name="Asistente de Física",
-            agent=self.classifier_agent,
-            session_service=self.session_service
-        )
+        # Mantener legacy support si es necesario, aunque ya no se usa LlmAgent directamente para la lógica core
+        if hasattr(self, 'classifier_agent'):
+             self.runner = Runner(
+                app_name="Asistente de Física",
+                agent=self.classifier_agent,
+                session_service=self.session_service
+            )
 
         print("✅ Componentes ADK inicializados")
 
     def _crear_agentes(self):
-        """Crear los agentes ADK con la sintaxis correcta."""
+        """Crear los módulos DSPy y agentes ADK de soporte."""
         
-        # Agente Clasificador
+        # 1. Inicializar Módulo DSPy
+        print("⚙️ Cargando módulo RAG optimizado con DSPy...")
+        self.rag_module = RAGModule()
+        
+        # Intentar cargar pesos optimizados
+        try:
+            optimizer_path = os.path.join(os.path.dirname(__file__), "optimized_responder.json")
+            if os.path.exists(optimizer_path):
+                self.rag_module.responder.load(optimizer_path)
+                print(f"✅ Pesos optimizados cargados desde {optimizer_path}")
+            else:
+                print("ℹ️ No se encontró 'optimized_responder.json', usando modelo base.")
+        except Exception as e:
+            print(f"⚠️ Error cargando pesos optimizados: {e}")
+
+        # 2. Agentes ADK Legacy (Mantenidos para compatibilidad de estructura, pero lógica core movida a DSPy)
+        # Esto asegura que si algún otro componente depende de self.classifier_agent, no rompa.
         self.classifier_agent = LlmAgent(
             name="clasificador",
             model="gemini-2.5-flash",
-            description="Agente especializado en clasificar consultas de física según el temario proporcionado",
-            instruction="""Eres un agente especializado en clasificar consultas de física según el temario proporcionado.
-                            A partir de la consulta de usuario y el contexto, realiza la clasificación.
-
-                            Debes proporcionar tu respuesta en el siguiente formato, y nada más:
-                            TEMA: [número y título]
-                            SUBTEMAS: [lista]
-                            KEYWORDS: [palabras clave]
-                            """
+            description="Agente especializado en clasificar consultas de física",
+            instruction="Legacy agent replaced by DSPy"
         )
-
-        # Agente Buscador
-        self.search_agent = LlmAgent(
-            name="buscador",
-            model="gemini-2.5-flash",
-            description="Agente de búsqueda especializado en física",
-            instruction="""Eres un agente de búsqueda especializado en física.
-Recibes una clasificación temática y una consulta original.
-Tu tarea es generar la mejor consulta de búsqueda posible para encontrar esta información en una base de datos vectorial.
-
-Responde SOLAMENTE con la consulta de búsqueda optimizada, sin explicaciones adicionales.
-"""
-        )
-
-        # Agente de Respuesta
-        self.response_agent = LlmAgent(
-            name="respondedor",
-            model="gemini-2.5-flash",
-            description="Profesor experto en física que proporciona explicaciones claras y precisas",
-            instruction="""Eres un profesor experto en física que proporciona explicaciones claras, precisas y didácticas.
-Tu objetivo es responder a la consulta del usuario basándote en la información proporcionada.
-
-**Tus Reglas:**
-- Usa principalmente los "FRAGMENTOS DE DOCUMENTOS RELEVANTES" para construir tu respuesta.
-- Si la información no es suficiente en los documentos, puedes usar tu conocimiento general, pero siempre aclara que la información no proviene de los documentos proporcionados.
-- Usa el "CONTEXTO DE CONVERSACIÓN ANTERIOR" para que tu respuesta fluya naturalmente si esto es parte de un diálogo.
-- Estructura tu respuesta de manera clara, usando ecuaciones (en formato de texto) cuando sea apropiado y explicando los conceptos paso a paso.
-- IMPORTANTE: Nunca digas frases como "Como modelo de lenguaje..." o "Basado en la información...". Actúa como un profesor experto con pleno conocimiento.
-"""
-        )
+        self.search_agent = LlmAgent(name="buscador", model="gemini-2.5-flash", instruction="Legacy")
+        self.response_agent = LlmAgent(name="respondedor", model="gemini-2.5-flash", instruction="Legacy")
 
         self.agents = {
             'classifier': self.classifier_agent,
             'search': self.search_agent,
             'response': self.response_agent
         }
-        print("✅ Agentes ADK creados correctamente")
+        print("✅ Agentes ADK (wrapper) y DSPy RAG Module creados")
+
+    # --- NUEVOS MÉTODOS HELPERS PARA DSPY CON TRAZABILIDAD ---
+
+    @medir_accion("dspy_clasificacion_busqueda", "agente", {"framework": "dspy"})
+    def _run_dspy_classify_search(self, consultation, context, syllabus):
+        """Ejecuta la clasificación y generación de búsqueda usando DSPy"""
+        # DSPy espera inputs directos. El módulo RAGModule.forward maneja esto.
+        return self.rag_module(
+            user_query=consultation,
+            memory_context=context,
+            syllabus=syllabus
+        )
+
+    @medir_accion("dspy_generar_respuesta", "agente", {"framework": "dspy"})
+    def _run_dspy_generate_response(self, consultation, context, classification, search_results):
+        """Ejecuta la generación de respuesta usando DSPy"""
+        return self.rag_module.generate_response(
+            user_query=consultation,
+            memory_context=context,
+            classification=classification,
+            retrieved_context=search_results
+        )
+    # ---------------------------------------------------------
 
     def _inicializar_modelo_embedding(self):
         """Inicializar el modelo de embeddings"""
@@ -290,7 +432,7 @@ Tu objetivo es responder a la consulta del usuario basándote en la información
             print(f"Error al leer {nombre_archivo}: {e}")
             return ""
 
-    @observe(name="temario", as_type="generation")
+    @medir_accion("procesar_temario", "procesamiento", {"formato": "pdf"})
     def procesar_pdfs_temario(self, archivos_pdf):
         """Procesar PDFs para extraer el temario"""
         contenido_completo = ""
@@ -388,7 +530,19 @@ TEMARIO DE FÍSICA:
         await client.upsert(collection_name=self.collection_name, points=points, wait=True)
         print(f"{len(points)} chunks almacenados en Qdrant")
 
-    @observe(name="procesar_y_almacenar_pdfs", as_type="span")
+    async def check_qdrant_has_data(self):
+        """Verificar si la colección de Qdrant existe y tiene datos"""
+        try:
+            client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key)
+            collection_info = await client.get_collection(self.collection_name)
+            points_count = collection_info.points_count
+            print(f"ℹ️ Colección '{self.collection_name}' encontrada con {points_count} puntos")
+            return points_count > 0
+        except Exception as e:
+            print(f"ℹ️ Colección '{self.collection_name}' no existe o no se puede acceder: {e}")
+            return False
+
+    @medir_accion("almacenar_pdfs_qdrant", "escritura_db", {"db": "qdrant"})
     async def procesar_y_almacenar_pdfs(self, pdf_files):
         """Procesar PDFs y almacenar en Qdrant"""
         all_chunks = []
@@ -451,10 +605,12 @@ TEMARIO DE FÍSICA:
             json.dump(metadata_dict, f, ensure_ascii=False, indent=4)
         print("✅ Metadatos guardados en 'pdf_metadata.json'")
 
-    @observe(name="search_documents", as_type="span")
+    @medir_accion("busqueda_qdrant", "lectura_db", {"db": "qdrant"})
     async def search_documents(self, query, top_k=5):
         """Realizar búsqueda en Qdrant"""
         try:
+            # Actualizar contexto de Langfuse con la query
+            
             client = AsyncQdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key)
 
             # Verificar conexión
@@ -498,7 +654,7 @@ TEMARIO DE FÍSICA:
                 with open("pdf_metadata.json", "r", encoding="utf-8") as f:
                     metadata = json.load(f)
 
-            for result in results:
+            for idx, result in enumerate(results):
                 meta = metadata.get(str(result.id), {})
                 payload = result.payload or {}
 
@@ -507,21 +663,25 @@ TEMARIO DE FÍSICA:
                     "texto": meta.get("chunk", payload.get("text", "Texto no disponible")),
                     "similitud": round(result.score, 4)
                 })
+                
 
+            
             return formatted_results
 
         except Exception as e:
             error_msg = f"Error en la búsqueda: {str(e)}"
             print(f"❌ {error_msg}")
+
             return [{"pdf": "Error", "texto": error_msg, "similitud": 0}]
 
-    # Función de flujo corregida
-    @observe(name="iniciar_flujo_adk_corregido", as_type="span")
+    # Función de flujo corregida (GEPA Optimized)
+    @medir_accion("flujo_adk_gepa", "pipeline", {"sistema": "dspy_gepa"})
     async def iniciar_flujo(self, consulta_usuario: str, user_id: str = "default_user"):
         """
-        Iniciar el flujo completo de procesamiento usando Google ADK
+        Iniciar el flujo completo de procesamiento usando DSPy (GEPA optimized).
         """
         print(f"📝 Consulta recibida de '{user_id}': {consulta_usuario}")
+        
         trayectoria = []
         inicio_total = time.time()
 
@@ -529,111 +689,81 @@ TEMARIO DE FÍSICA:
         contexto_memoria = self.memoria_semantica.get_context()
 
         try:
-            # --- Paso 1: Clasificación ---
+            # --- Paso 1: Clasificación y Generación de Búsqueda (DSPy) ---
             inicio_paso = time.time()
 
-            clasificacion_data = {
-                "consulta_usuario": consulta_usuario,
-                "contexto_memoria": contexto_memoria,
-                "temario": self.temario
-            }
-
-            clasificacion = await self._get_agent_response(
-                self.classifier_agent,
-                clasificacion_data
+            # Usar el wrapper trazable para llamar a DSPy
+            dspy_prediction = self._run_dspy_classify_search(
+                consultation=consulta_usuario,
+                context=contexto_memoria,
+                syllabus=self.temario
             )
 
-            tiempo_clasificacion = time.time() - inicio_paso
-
-            # Verificar que la respuesta no sea None
-            if clasificacion is None:
-                # Fallback si falla la clasificación
-                clasificacion = "TEMA: Consulta General\nSUBTEMAS: []\nKEYWORDS: []"
+            clasificacion = dspy_prediction.classification
+            consulta_busqueda = dspy_prediction.search_query
+            
+            tiempo_paso1 = time.time() - inicio_paso
 
             trayectoria.append({
-                "agente": "Clasificador",
-                "respuesta": clasificacion,
-                "tiempo": tiempo_clasificacion
-            })
-            print(f"✅ Clasificación completada en {tiempo_clasificacion:.2f}s")
-
-            # --- Paso 2: Generar consulta de búsqueda ---
-            inicio_paso = time.time()
-
-            search_data = {
+                "paso": "clasificacion_busqueda",
                 "clasificacion": clasificacion,
-                "consulta_original": consulta_usuario,
-                "contexto_conversacion": contexto_memoria
-            }
-
-            consulta_busqueda = await self._get_agent_response(
-                self.search_agent,
-                search_data
-            )
-
-            tiempo_query = time.time() - inicio_paso
-
-            if consulta_busqueda is None:
-                consulta_busqueda = consulta_usuario
-
-            trayectoria.append({
-                "agente": "GeneraciónConsulta",
-                "respuesta": consulta_busqueda,
-                "tiempo": tiempo_query
+                "query_generada": consulta_busqueda,
+                "tiempo": tiempo_paso1
             })
-            print(f"✅ Consulta de búsqueda generada en {tiempo_query:.2f}s")
+            
+            print(f"✅ Clasificación DSPy completada en {tiempo_paso1:.2f}s")
+            print(f"   Tipo: {clasificacion}")
+            print(f"   Búsqueda generada: {consulta_busqueda}")
 
-            # --- Paso 3: Realizar búsqueda en Qdrant ---
+
+            # --- Paso 2: Realizar búsqueda en Qdrant (Existente) ---
             inicio_paso = time.time()
             resultados_busqueda = await self.search_documents(consulta_busqueda)
-            tiempo_busqueda = time.time() - inicio_paso
-
-            trayectoria.append({
-                "agente": "BúsquedaQdrant",
-                "respuesta": f"Encontrados {len(resultados_busqueda)} documentos",
-                "tiempo": tiempo_busqueda
-            })
-            print(f"✅ Búsqueda en Qdrant completada en {tiempo_busqueda:.2f}s")
-
-            # --- Paso 4: Generar respuesta final ---
-            inicio_paso = time.time()
+            
+            # Formatear resultados para el prompt
             contexto_busqueda = "\n".join([
                 f"--- Fragmento {i} (PDF: {res['pdf']}) ---\n{res['texto']}"
                 for i, res in enumerate(resultados_busqueda, 1)
             ])
-
-            response_data = {
-                "consulta_usuario": consulta_usuario,
-                "contexto_memoria": contexto_memoria,
-                "clasificacion": clasificacion,
-                "contexto_documentos": contexto_busqueda
-            }
-
-            respuesta_final = await self._get_agent_response(
-                self.response_agent,
-                response_data
-            )
-
-            tiempo_respuesta = time.time() - inicio_paso
-
-            if respuesta_final is None:
-                raise Exception("La respuesta del agente respondedor es None")
+            
+            tiempo_paso2 = time.time() - inicio_paso
 
             trayectoria.append({
-                "agente": "RespondeConsulta",
-                "respuesta": respuesta_final,
-                "tiempo": tiempo_respuesta
+                "paso": "busqueda_qdrant",
+                "resultados": len(resultados_busqueda),
+                "tiempo": tiempo_paso2
             })
-            print(f"✅ Respuesta final generada en {tiempo_respuesta:.2f}s")
+            print(f"✅ Búsqueda en Qdrant completada en {tiempo_paso2:.2f}s")
+
+
+            # --- Paso 3: Generar respuesta final (DSPy) ---
+            inicio_paso = time.time()
+
+            # Usar el wrapper trazable para generar respuesta
+            respuesta_final = self._run_dspy_generate_response(
+                consultation=consulta_usuario,
+                context=contexto_memoria,
+                classification=clasificacion,
+                search_results=contexto_busqueda
+            )
+
+            tiempo_paso3 = time.time() - inicio_paso
+
+            trayectoria.append({
+                "paso": "generacion_respuesta",
+                "respuesta_length": len(respuesta_final),
+                "tiempo": tiempo_paso3
+            })
+            print(f"✅ Respuesta final generada en {tiempo_paso3:.2f}s")
 
             # Actualizar la memoria con la nueva interacción
             self.memoria_semantica.add_interaction(consulta_usuario, respuesta_final)
 
             tiempo_total = time.time() - inicio_total
             
-            # Guardar la trayectoria (opcional, puede fallar si no hay permisos)
+            # Guardar la trayectoria (opcional)
             try:
-                with open("trayectoria_adk.json", "w", encoding="utf-8") as f:
+                with open("trayectoria_gepa.json", "w", encoding="utf-8") as f:
                     json.dump(trayectoria, f, indent=4, ensure_ascii=False)
             except Exception:
                 pass
@@ -641,13 +771,12 @@ TEMARIO DE FÍSICA:
             return respuesta_final
 
         except Exception as e:
-            print(f"❌ Error en el flujo ADK: {e}")
+            print(f"❌ Error en el flujo DSPy/GEPA: {e}")
             import traceback
             traceback.print_exc()
 
-            # Devolver una respuesta de fallback usando el conocimiento del modelo
-            fallback_response = f"Lo siento, hubo un error técnico al procesar tu consulta. Por favor, intenta de nuevo."
-            return fallback_response
+            # Devolver una respuesta de fallback
+            return f"Lo siento, hubo un error técnico al procesar tu consulta. Por favor, intenta de nuevo."
 
     # Clase interna para memoria semántica
     class SemanticMemory:
@@ -797,29 +926,55 @@ async def lifespan(app: FastAPI):
     print("🚀 Iniciando Asistente de Física...")
     asistente.inicializar_componentes()
 
-    # Procesar PDFs para extraer temario
-    dir_pdf = os.getenv("DIR_PDF", "./pdfs")  # Usar variable de entorno o directorio por defecto
-    archivos_pdf = []
-    
-    if os.path.exists(dir_pdf):
-        archivos_pdf = [
-            os.path.join(dir_pdf, f) 
-            for f in os.listdir(dir_pdf) 
-            if f.lower().endswith('.pdf')
-        ]
-        print(f"📁 Directorio de PDFs: {dir_pdf}")
-        print(f"📚 Encontrados {len(archivos_pdf)} archivos PDF")
-    else:
-        print(f"⚠️ Directorio de PDFs no encontrado: {dir_pdf}")
-    
-    if archivos_pdf:
-        asistente.procesar_pdfs_temario(archivos_pdf)
-        await asistente.procesar_y_almacenar_pdfs(archivos_pdf)
-    else:
-        print("ℹ️ No se encontraron archivos PDF locales. Se usará la base de datos existente.")
-        # Intentar recuperar temario de la base de datos o generar uno genérico
-        # Por ahora dejamos que el flujo normal maneje esto
+    # Verificar si Qdrant ya tiene datos
+    # Verificar si Qdrant ya tiene datos
+    try:
+        # has_data = await asistente.check_qdrant_has_data()
+        # if has_data:
+        #     print("✅ Qdrant ya contiene datos. (Verificando nuevos PDFs...)")
+
+        dir_pdf = os.getenv("DIR_PDF", "./pdfs")
+        archivos_pdf = []
         
+        if os.path.exists(dir_pdf):
+            archivos_pdf = [
+                os.path.join(dir_pdf, f) 
+                for f in os.listdir(dir_pdf) 
+                if f.lower().endswith('.pdf')
+            ]
+        
+        if archivos_pdf:
+            try:
+                print(f"📖 Procesando {len(archivos_pdf)} archivos PDF en '{dir_pdf}'...")
+                asistente.procesar_pdfs_temario(archivos_pdf)
+                await asistente.procesar_y_almacenar_pdfs(archivos_pdf)
+                print("✅ PDFs procesados y cargados exitosamente (Sobrescribiendo/Actualizando)")
+            except Exception as e:
+                print(f"❌ Error al procesar PDFs: {e}")
+                import traceback
+                traceback.print_exc()
+                if not asistente.temario:
+                    asistente.temario = "Física I - UBA (Error al cargar PDFs)"
+        else:
+            print(f"ℹ️ No se encontraron archivos PDF en '{dir_pdf}'. Se usará conocimiento existente en Qdrant o del modelo.")
+            try:
+                has_data = await asistente.check_qdrant_has_data()
+                if has_data:
+                    # Intentar cargar temario de metadatos o generarlo genérico
+                    asistente.temario = "Física I - UBA (Datos en Qdrant)"
+                    print("✅ Se detectaron datos previos en Qdrant.")
+                else:
+                    asistente.temario = "Física I - UBA (Sin datos)"
+            except:
+                pass
+    except Exception as e:
+        print(f"❌ Error durante la inicialización: {e}")
+        import traceback
+        traceback.print_exc()
+        # Continuar de todos modos
+        asistente.temario = "Física I - UBA"
+    
+    print("✅ Backend listo y escuchando en el puerto configurado")
     yield
     # Shutdown
     print("👋 Apagando Asistente de Física...")
