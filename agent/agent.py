@@ -449,6 +449,18 @@ class AsistenteFisica:
 
         self.contenido_completo = contenido_completo
 
+        
+        # Verificar cache
+        cache_file = "temario.txt"
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    self.temario = f.read()
+                print(f"✅ Temario cargado desde cache ({cache_file})")
+                return self.temario
+            except Exception as e:
+                print(f"⚠️ Error leyendo cache: {e}. Se regenerará.")
+
         # Extraer temario usando LangChain (para compatibilidad)
         system_message = f"""
 Eres un experto profesor Física I de la Universidad de Buenos Aires.
@@ -469,6 +481,14 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
 
         ai_msg = self.llm.invoke(messages)
         self.temario = ai_msg.content
+        
+        # Guardar en cache
+        try:
+            with open(cache_file, "w", encoding="utf-8") as f:
+                f.write(self.temario)
+            print(f"✅ Temario guardado en cache ({cache_file})")
+        except Exception as e:
+            print(f"⚠️ Error guardando cache: {e}")
 
         # Actualizar el temario en el agente clasificador
         if hasattr(self, 'classifier_agent'):

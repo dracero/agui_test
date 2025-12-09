@@ -225,8 +225,8 @@ QDRANT_KEY=  # Dejar vacío para local
 
 En `agent/agent.py`, busca las líneas con `model="gemini-2.5-flash"` y cámbialo por:
 - `gemini-2.0-flash-exp` (más rápido)
-- `gemini-1.5-pro` (más preciso)
-- `gemini-1.5-flash` (balance)
+- `gemini-2.5-pro` (más preciso)
+- `gemini-2.5-flash` (balance)
 
 ### Modificar mensajes del chat
 

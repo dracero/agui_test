@@ -1,0 +1,22 @@
+Puedo contestarte sobre los siguientes contenidos, basados en el índice proporcionado:
+
+1.  Introducción a la Dinámica del Cuerpo Rígido.
+2.  Resultado de trasladar una fuerza al Centro de Masa (CM).
+3.  Cupla o par de fuerzas.
+4.  Resultante de un sistema de fuerzas y torques aplicados a un Cuerpo Rígido (CR).
+5.  Momento cinético de un CR en rotación.
+6.  Cálculo del momento de inercia baricéntrico de un cilindro respecto de un eje perpendicular a su eje de simetría.
+7.  Teorema de Steiner o de los ejes paralelos.
+8.  Cálculo del momento cinético respecto a un eje cualquiera. Expresión del torque respecto al CM.
+9.  Momento cinético relativo al Centro Instantáneo de Rotación (CIR). Expresión del torque respecto al CIR.
+10. Los momentos de inercia son aditivos y sustractivos.
+11. Momentos de inercia baricéntricos de cuerpos no homogéneos y/o no simétricos.
+12. Péndulo físico.
+13. Energía en el CR.
+14. Trabajo y energía para el CR.
+15. Ecuaciones fundamentales de la dinámica del CR.
+16. Acerca de la fuerza de rozamiento.
+17. Aplicaciones de dinámica del CR.
+18. Situación problemática de integración metodológica.
+
+Además, puedo explicar conceptos como la diferencia entre el modelo de punto material y cuerpo rígido, cómo se trasladan fuerzas al CM, la definición y propiedades de una cupla, y la noción de momento de inercia como análogo rotacional de la masa.
