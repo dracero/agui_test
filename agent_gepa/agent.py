@@ -42,35 +42,54 @@ except ImportError:
     from dspy_modules import RAGModule
 
 # ============================================================================
-# CONFIGURACIÓN OFICIAL DE LANGSMITH (OPENTELEMETRY)
+# CONFIGURACIÓN DE LANGSMITH (TELEMETRÍA)
 # ============================================================================
-try:
-    from langsmith.integrations.otel import configure
-    from openinference.instrumentation.google_adk import GoogleADKInstrumentor
+def setup_langsmith_environment():
+    """Configurar variables de entorno para LangSmith según el patrón correcto."""
     
-    # Configurar trazado automático
-    configure(
-        project_name=os.getenv("LANGCHAIN_PROJECT") or os.getenv("LANGSMITH_PROJECT") or "fisica-un-bot"
-    )
+    langsmith_config = {
+        "LANGCHAIN_TRACING_V2": "true",
+        "LANGCHAIN_API_KEY": os.getenv("LANGSMITH_API_KEY") or os.getenv("LANGCHAIN_API_KEY"),
+        "LANGCHAIN_ENDPOINT": "https://api.smith.langchain.com",
+        "LANGCHAIN_PROJECT": os.getenv("LANGCHAIN_PROJECT") or os.getenv("LANGSMITH_PROJECT") or "fisica-un-bot"
+    }
     
-    # Instrumentar ADK
-    GoogleADKInstrumentor().instrument()
+    for key, value in langsmith_config.items():
+        if value:
+            os.environ[key] = value
+            print(f"✅ {key} configurado")
     
-    from langsmith import traceable
-    print("✅ LangSmith configurado con OpenTelemetry")
-    LANGSMITH_ENABLED = True
+    try:
+        from langsmith import traceable, Client
+        
+        client = Client()
+        print(f"🔗 Conectado a LangSmith - Proyecto: {os.environ.get('LANGCHAIN_PROJECT', 'por_defecto')}")
+        
+        return True, traceable, client
+    
+    except Exception as e:
+        print(f"⚠️ Error configurando LangSmith: {e}")
+        print("💡 El sistema funcionará sin monitoreo LangSmith")
+        
+        def dummy_traceable(*args, **kwargs):
+            def decorator(func):
+                return func
+            if len(args) == 1 and callable(args[0]):
+                return args[0]
+            return decorator
+        
+        return False, dummy_traceable, None
 
-except ImportError as e:
-    print(f"⚠️ Error importando dependencias de OpenTelemetry: {e}")
-    print("💡 Asegúrate de instalar: opentelemetry-sdk opentelemetry-exporter-otlp openinference-instrumentation-google-adk langsmith[otel]")
-    LANGSMITH_ENABLED = False
-    
-    def traceable(*args, **kwargs):
-        def decorator(func):
-            return func
-        if len(args) == 1 and callable(args[0]):
-            return args[0]
-        return decorator
+# Configurar LangSmith al importar
+LANGSMITH_ENABLED, traceable, langsmith_client = setup_langsmith_environment()
+
+# Intentar instrumentar ADK si está disponible
+try:
+    from openinference.instrumentation.google_adk import GoogleADKInstrumentor
+    GoogleADKInstrumentor().instrument()
+    print("✅ Google ADK instrumentado para LangSmith")
+except ImportError:
+    print("ℹ️ openinference-instrumentation-google-adk no disponible (opcional)")
 
 # Aplicar nest_asyncio para permitir loops anidados
 nest_asyncio.apply()
@@ -113,6 +132,19 @@ def medir_accion(nombre: str, tipo: str, extra_metadata: dict = None):
                 result = await func(*args, **kwargs)
                 
                 tiempo = time.time() - inicio
+                
+                # Loguear outputs para trazabilidad
+                if isinstance(result, dict):
+                    # Para búsquedas de Qdrant, mostrar documentos
+                    if 'documents' in result:
+                        print(f"📤 Documentos recuperados: {result.get('num_results', 0)}")
+                        for doc in result.get('documents', [])[:5]:
+                            print(f"   📄 #{doc.get('rank', '?')} | Score: {doc.get('similarity_score', 0):.4f} | {doc.get('source', 'N/A')}")
+                    else:
+                        print(f"📤 Output (dict): {list(result.keys())}")
+                elif result:
+                    print(f"📤 Output: {str(result)[:150]}...")
+                
                 print(f"✅ Éxito | ⏱️ Tiempo: {tiempo:.2f}s")
                 print(f"{'='*60}\n")
                 
@@ -186,6 +218,17 @@ class AsistenteFisica:
         self.classifier_agent = None
         self.search_agent = None
         self.response_agent = None
+        
+        # Cliente Qdrant reutilizable para optimizar conexiones
+        self._qdrant_client = None
+        self._qdrant_vectorstore = None
+        
+        # Estadísticas de tokens
+        self.token_stats = {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "requests": []
+        }
 
         print("✅ AsistenteFisica inicializado correctamente")
 
@@ -194,6 +237,108 @@ class AsistenteFisica:
         if not os.getenv("GOOGLE_API_KEY"):
             print("⚠️ GOOGLE_API_KEY no encontrada en variables de entorno")
         print("✅ APIs configuradas")
+    
+    def _get_qdrant_client(self):
+        """Obtener cliente Qdrant reutilizable"""
+        if self._qdrant_client is None:
+            self._qdrant_client = QdrantClient(
+                url=self.qdrant_url, 
+                api_key=self.qdrant_api_key, 
+                check_compatibility=False
+            )
+        return self._qdrant_client
+    
+    def _get_vectorstore(self):
+        """Obtener vectorstore reutilizable"""
+        if self._qdrant_vectorstore is None:
+            self._qdrant_vectorstore = QdrantVectorStore(
+                client=self._get_qdrant_client(),
+                collection_name=self.collection_name,
+                embedding=self.embeddings,
+            )
+        return self._qdrant_vectorstore
+    
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimar tokens de un texto (aprox 1 token = 4 chars en español)"""
+        if not text:
+            return 0
+        return len(text) // 4
+    
+    def _log_token_usage(self, paso: str, input_text: str, output_text: str, modelo: str = "gemini-2.5-flash"):
+        """Registrar y mostrar uso de tokens"""
+        input_tokens = self._estimate_tokens(input_text)
+        output_tokens = self._estimate_tokens(output_text)
+        total_tokens = input_tokens + output_tokens
+        
+        self.token_stats["total_input_tokens"] += input_tokens
+        self.token_stats["total_output_tokens"] += output_tokens
+        self.token_stats["requests"].append({
+            "paso": paso,
+            "modelo": modelo,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens
+        })
+        
+        print(f"\n📊 TOKENS [{paso}] - Modelo: {modelo}")
+        print(f"   ├─ Input:  {input_tokens:,} tokens")
+        print(f"   ├─ Output: {output_tokens:,} tokens")
+        print(f"   └─ Total:  {total_tokens:,} tokens")
+        print(f"   📈 Acumulado: {self.token_stats['total_input_tokens']:,} in / {self.token_stats['total_output_tokens']:,} out")
+        
+        return {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens}
+    
+    @traceable(name="llm_call", run_type="llm")
+    async def _call_llm_traced(self, agent_name: str, system_prompt: str, user_prompt: str) -> dict:
+        """
+        Llamar al LLM con tracing completo para LangSmith.
+        Retorna la respuesta y metadata de tokens.
+        """
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt)
+        ]
+        
+        # Llamar al LLM de LangChain (automáticamente traceado)
+        response = await self.llm.ainvoke(messages)
+        
+        # Extraer información de tokens si está disponible
+        token_usage = {}
+        if hasattr(response, 'response_metadata') and response.response_metadata:
+            usage = response.response_metadata.get('usage_metadata', {})
+            token_usage = {
+                "input_tokens": usage.get('prompt_token_count', 0) or usage.get('input_tokens', 0),
+                "output_tokens": usage.get('candidates_token_count', 0) or usage.get('output_tokens', 0),
+                "total_tokens": usage.get('total_token_count', 0) or usage.get('total_tokens', 0)
+            }
+        
+        # Si no hay metadata, estimar
+        if not token_usage.get('total_tokens'):
+            token_usage = {
+                "input_tokens": self._estimate_tokens(system_prompt + user_prompt),
+                "output_tokens": self._estimate_tokens(response.content),
+                "total_tokens": self._estimate_tokens(system_prompt + user_prompt + response.content)
+            }
+        
+        # Actualizar estadísticas
+        self.token_stats["total_input_tokens"] += token_usage["input_tokens"]
+        self.token_stats["total_output_tokens"] += token_usage["output_tokens"]
+        self.token_stats["requests"].append({
+            "paso": agent_name,
+            "modelo": "gemini-2.5-flash",
+            **token_usage
+        })
+        
+        print(f"\n📊 TOKENS [{agent_name}] - LangSmith Traced")
+        print(f"   ├─ Input:  {token_usage['input_tokens']:,} tokens")
+        print(f"   ├─ Output: {token_usage['output_tokens']:,} tokens")
+        print(f"   └─ Total:  {token_usage['total_tokens']:,} tokens")
+        
+        return {
+            "content": response.content,
+            "token_usage": token_usage,
+            "model": "gemini-2.5-flash"
+        }
 
     def inicializar_componentes(self):
         """Inicializar todos los componentes del asistente"""
@@ -464,7 +609,7 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
     async def check_qdrant_has_data(self):
         """Verificar si la colección de Qdrant existe y tiene datos"""
         try:
-            client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, check_compatibility=False)
+            client = self._get_qdrant_client()
             collection_info = client.get_collection(self.collection_name)
             points_count = collection_info.points_count
             print(f"ℹ️ Colección '{self.collection_name}' encontrada con {points_count} puntos")
@@ -498,7 +643,7 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
         if not documents:
             return
 
-        client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, check_compatibility=False)
+        client = self._get_qdrant_client()
         
         vectorstore = QdrantVectorStore(
             client=client,
@@ -508,57 +653,129 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
 
         await vectorstore.aadd_documents(documents)
         print(f"✅ {len(documents)} chunks procesados y almacenados en Qdrant (LangChain)")
+        
+        # Invalidar cache del vectorstore para forzar recarga
+        self._qdrant_vectorstore = None
 
-    @medir_accion("busqueda_qdrant", "lectura_db", {"db": "qdrant"})
+    @medir_accion("busqueda_qdrant", "lectura_db", {"db": "qdrant", "tipo": "vector_search"})
     async def search_documents(self, query, top_k=5):
-        """Realizar búsqueda en Qdrant usando LangChain"""
+        """Realizar búsqueda en Qdrant usando LangChain - Con trazabilidad detallada"""
+        print(f"\n{'='*60}")
+        print(f"🔍 BÚSQUEDA QDRANT | Query: {query[:80]}...")
+        print(f"{'='*60}")
+        
+        inicio_busqueda = time.time()
+        
         try:
-            client = QdrantClient(url=self.qdrant_url, api_key=self.qdrant_api_key, check_compatibility=False)
+            # Usar cliente y vectorstore reutilizables para mejor rendimiento
+            if self._qdrant_vectorstore is None:
+                self._qdrant_vectorstore = QdrantVectorStore(
+                    client=self._get_qdrant_client(),
+                    collection_name=self.collection_name,
+                    embedding=self.embeddings,
+                )
             
-            vectorstore = QdrantVectorStore(
-                client=client,
-                collection_name=self.collection_name,
-                embedding=self.embeddings,
-            )
+            vectorstore = self._qdrant_vectorstore
 
             results = await vectorstore.asimilarity_search_with_score(query, k=top_k)
 
+            # Formatear resultados con información completa para el tracer
             formatted_results = []
-            for doc, score in results:
-                formatted_results.append({
+            documents_for_trace = []
+            
+            for idx, (doc, score) in enumerate(results):
+                doc_info = {
                     "pdf": doc.metadata.get("pdf_name", "N/A"),
                     "texto": doc.page_content,
                     "similitud": round(score, 4)
-                })
+                }
+                formatted_results.append(doc_info)
                 
-            return formatted_results
+                # Información detallada para el tracer
+                documents_for_trace.append({
+                    "rank": idx + 1,
+                    "source": doc.metadata.get("pdf_name", "N/A"),
+                    "chunk_id": doc.metadata.get("chunk_id", "N/A"),
+                    "similarity_score": round(score, 4),
+                    "content_preview": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content,
+                    "content_length": len(doc.page_content)
+                })
+            
+            # Log para consola y tracer
+            print(f"\n📊 RESULTADOS DE BÚSQUEDA ({len(formatted_results)} documentos):")
+            print("-" * 50)
+            for doc_trace in documents_for_trace:
+                print(f"  #{doc_trace['rank']} | Score: {doc_trace['similarity_score']:.4f} | Fuente: {doc_trace['source']}")
+                print(f"      Preview: {doc_trace['content_preview'][:100]}...")
+            print("-" * 50)
+            
+            # Retorno estructurado para LangSmith (el tracer captura automáticamente el return)
+            # Agregamos metadata extra que LangSmith mostrará
+            return {
+                "query": query,
+                "top_k": top_k,
+                "num_results": len(formatted_results),
+                "documents": documents_for_trace,
+                "results": formatted_results  # Para compatibilidad con el código existente
+            }
 
         except Exception as e:
             error_msg = f"Error en la búsqueda: {str(e)}"
             print(f"❌ {error_msg}")
-            return [{"pdf": "Error", "texto": error_msg, "similitud": 0}]
+            return {
+                "query": query,
+                "top_k": top_k,
+                "num_results": 0,
+                "documents": [],
+                "results": [{"pdf": "Error", "texto": error_msg, "similitud": 0}],
+                "error": error_msg
+            }
 
     @medir_accion("ejecutar_agente_adk", "agente_adk")
     async def _get_agent_response(self, agent, input_data):
-        """Función auxiliar para obtener respuesta de un agente ADK"""
+        """
+        Función auxiliar para obtener respuesta de un agente.
+        Usa LangChain directamente con tracing para LangSmith.
+        """
         try:
             if isinstance(input_data, dict):
                 prompt = self._format_prompt_for_agent(agent.name, input_data)
             else:
                 prompt = str(input_data)
 
-            runner = Runner(agent=agent)
-            response = await runner.run(prompt)
+            # Obtener instrucción del agente
+            system_prompt = getattr(agent, 'instruction', 'Eres un asistente de física experto.')
             
-            if hasattr(response, 'text'):
-                return response.text
-            elif hasattr(response, 'content'):
-                return response.content
-            return str(response)
+            # Usar LangChain con tracing completo para LangSmith
+            result = await self._call_llm_traced(
+                agent_name=agent.name,
+                system_prompt=system_prompt,
+                user_prompt=prompt
+            )
+            
+            return result["content"]
 
         except Exception as e:
             print(f"Error ejecutando agente {agent.name}: {e}")
-            return None
+            import traceback
+            traceback.print_exc()
+            
+            # Fallback sin tracing
+            try:
+                if isinstance(input_data, dict):
+                    prompt = self._format_prompt_for_agent(agent.name, input_data)
+                else:
+                    prompt = str(input_data)
+                    
+                messages = [
+                    SystemMessage(content=getattr(agent, 'instruction', 'Eres un asistente de física experto.')),
+                    HumanMessage(content=prompt)
+                ]
+                response = await self.llm.ainvoke(messages)
+                return response.content
+            except Exception as fallback_error:
+                print(f"Error en fallback para {agent.name}: {fallback_error}")
+                return f"Error procesando con {agent.name}"
 
     def _format_prompt_for_agent(self, agent_name, data):
         """Formatear el prompt según el agente específico y la firma DSPy esperada"""
@@ -635,6 +852,10 @@ Generate response.
                 input_data=clasificacion_data
             )
             
+            # Asegurar que clasificacion_raw no sea None
+            if not clasificacion_raw:
+                clasificacion_raw = "Clasificación no disponible - usando consulta original"
+            
             tiempo_clasificacion = time.time() - inicio_paso
             
             trayectoria.append({
@@ -649,8 +870,8 @@ Generate response.
                     "syllabus_length": len(self.temario) if self.temario else 0
                 },
                 "output": {
-                    "classification": clasificacion_raw[:200] + ("..." if len(clasificacion_raw) > 200 else ""),
-                    "output_length": len(clasificacion_raw) if clasificacion_raw else 0
+                    "classification": str(clasificacion_raw)[:200] + ("..." if len(str(clasificacion_raw)) > 200 else ""),
+                    "output_length": len(str(clasificacion_raw)) if clasificacion_raw else 0
                 },
                 "tiempo_segundos": round(tiempo_clasificacion, 3),
                 "timestamp": time.strftime('%H:%M:%S')
@@ -658,6 +879,10 @@ Generate response.
             
             print(f"✅ [Clasificador] Completado en {tiempo_clasificacion:.2f}s")
             print(f"   📤 Output: {str(clasificacion_raw)[:150]}...")
+            
+            # Registrar tokens del clasificador
+            input_text_1 = self._format_prompt_for_agent("clasificador", clasificacion_data)
+            self._log_token_usage("Clasificador", input_text_1, str(clasificacion_raw))
 
             # PASO 2: GENERADOR DE BÚSQUEDA
             print(f"\n🔹 PASO 2/4: GENERACIÓN DE BÚSQUEDA")
@@ -695,6 +920,10 @@ Generate response.
             
             print(f"✅ [Buscador] Query generada en {tiempo_query:.2f}s")
             print(f"   📤 Query: {consulta_busqueda}")
+            
+            # Registrar tokens del buscador
+            input_text_2 = self._format_prompt_for_agent("buscador", search_data)
+            self._log_token_usage("Buscador", input_text_2, str(consulta_busqueda))
 
             # PASO 3: BÚSQUEDA EN QDRANT
             print(f"\n🔹 PASO 3/4: BÚSQUEDA VECTORIAL")
@@ -702,7 +931,11 @@ Generate response.
             
             # Limpiar query (manejo de nulos seguro)
             clean_query = (consulta_busqueda or "").replace('Search Query:', '').replace('"', '').strip()
-            resultados_busqueda = await self.search_documents(clean_query)
+            search_response = await self.search_documents(clean_query)
+            
+            # Extraer resultados del nuevo formato estructurado
+            resultados_busqueda = search_response.get("results", [])
+            documents_trace = search_response.get("documents", [])
             
             tiempo_busqueda = time.time() - inicio_paso
             
@@ -717,14 +950,7 @@ Generate response.
                 },
                 "output": {
                     "num_docs": len(resultados_busqueda),
-                    "docs_summary": [
-                        {
-                            "pdf": res['pdf'],
-                            "similitud": res['similitud'],
-                            "texto_preview": res['texto'][:100] + "..."
-                        }
-                        for res in resultados_busqueda[:3]
-                    ]
+                    "documents_retrieved": documents_trace  # Ahora incluye info detallada para el tracer
                 },
                 "tiempo_segundos": round(tiempo_busqueda, 3),
                 "timestamp": time.strftime('%H:%M:%S')
@@ -777,6 +1003,10 @@ Generate response.
             
             print(f"✅ [Respondedor] Respuesta generada en {tiempo_respuesta:.2f}s")
             print(f"   📤 Preview: {str(respuesta_final)[:150]}...")
+            
+            # Registrar tokens del respondedor
+            input_text_4 = self._format_prompt_for_agent("respondedor", response_data)
+            self._log_token_usage("Respondedor", input_text_4, str(respuesta_final))
 
             self.memoria_semantica.add_interaction(consulta_usuario, respuesta_final)
             
@@ -810,6 +1040,18 @@ Generate response.
             print(f"\n{'='*80}")
             print(f"✅ FLUJO COMPLETADO en {tiempo_total:.2f}s")
             print(f"📊 Trayectoria guardada en 'trayectoria_adk_completa.json'")
+            print(f"{'='*80}")
+            
+            # Resumen de tokens del flujo
+            print(f"\n📊 RESUMEN DE TOKENS DEL FLUJO")
+            print(f"{'='*60}")
+            for req in self.token_stats["requests"][-3:]:  # Últimas 3 solicitudes LLM
+                print(f"   └─ {req['paso']:15} | In: {req['input_tokens']:>6,} | Out: {req['output_tokens']:>6,} | Total: {req['total_tokens']:>7,}")
+            print(f"{'='*60}")
+            print(f"📈 TOTALES DE SESIÓN:")
+            print(f"   ├─ Input total:  {self.token_stats['total_input_tokens']:,} tokens")
+            print(f"   ├─ Output total: {self.token_stats['total_output_tokens']:,} tokens")
+            print(f"   └─ Gran total:   {self.token_stats['total_input_tokens'] + self.token_stats['total_output_tokens']:,} tokens")
             print(f"{'='*80}\n")
 
             return respuesta_final
@@ -854,13 +1096,18 @@ class RAGAgent(LlmAgent):
             **kwargs
         )
     
+    @traceable(name="chat_consulta_usuario", run_type="chain", metadata={"source": "web_ui", "sistema": "rag_gepa"})
     async def generate(self, prompt: str, **kwargs) -> str:
         """Método principal que procesa las consultas del usuario"""
+        print(f"\n{'='*60}")
+        print(f"💬 NUEVA CONSULTA DE USUARIO: {prompt[:100]}...")
+        print(f"{'='*60}")
         try:
             respuesta = await self.asistente.iniciar_flujo(prompt, user_id="usuario_web")
+            print(f"✅ Respuesta generada: {str(respuesta)[:100]}...")
             return respuesta
         except Exception as e:
-            print(f"Error en RAGAgent.generate: {e}")
+            print(f"❌ Error en RAGAgent.generate: {e}")
             import traceback
             traceback.print_exc()
             return f"Lo siento, hubo un error al procesar tu consulta."
@@ -933,11 +1180,120 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-add_adk_fastapi_endpoint(app, adk_fisica_agent, path="/")
+# ============================================================================
+# ENDPOINT PERSONALIZADO PARA AG-UI CON TRACING COMPLETO
+# ============================================================================
+from fastapi import Request
+from fastapi.responses import StreamingResponse
+import uuid
+
+class ChatRequest(BaseModel):
+    """Modelo para solicitudes de chat"""
+    message: str
+    user_id: str = "default_user"
+    session_id: str = None
+
+@app.post("/")
+async def chat_endpoint(request: Request):
+    """
+    Endpoint principal compatible con AG-UI/CopilotKit.
+    Llama directamente al flujo RAG con tracing de LangSmith.
+    """
+    try:
+        body = await request.json()
+        
+        # Extraer el mensaje del usuario del formato AG-UI
+        messages = body.get("messages", [])
+        user_message = ""
+        
+        # AG-UI envía mensajes en formato específico
+        for msg in messages:
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    user_message = content
+                elif isinstance(content, list):
+                    # Contenido puede ser una lista de partes
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            user_message = part.get("text", "")
+                        elif isinstance(part, str):
+                            user_message = part
+        
+        if not user_message:
+            # Fallback: buscar en otras estructuras posibles
+            user_message = body.get("message", body.get("query", body.get("input", "")))
+        
+        if not user_message:
+            print("⚠️ No se encontró mensaje del usuario en la solicitud")
+            print(f"📦 Body recibido: {json.dumps(body, indent=2)[:500]}")
+        
+        user_id = body.get("user_id", body.get("threadId", "usuario_web"))
+        
+        print(f"\n{'='*60}")
+        print(f"📨 SOLICITUD RECIBIDA")
+        print(f"👤 User ID: {user_id}")
+        print(f"💬 Mensaje: {user_message[:100]}...")
+        print(f"{'='*60}\n")
+        
+        # Ejecutar el flujo RAG completo con tracing
+        respuesta = await asistente.iniciar_flujo(user_message, user_id=user_id)
+        
+        # Generar respuesta en formato streaming compatible con AG-UI
+        async def generate_stream():
+            message_id = str(uuid.uuid4())
+            
+            # Evento RUN_STARTED (requerido por AG-UI)
+            yield f"data: {json.dumps({'type': 'RUN_STARTED', 'runId': message_id, 'threadId': user_id})}\n\n"
+            
+            # Evento TEXT_MESSAGE_START
+            yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'messageId': message_id, 'role': 'assistant'})}\n\n"
+            
+            # Evento TEXT_MESSAGE_CONTENT (enviar respuesta completa)
+            yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_CONTENT', 'messageId': message_id, 'delta': respuesta})}\n\n"
+            
+            # Evento TEXT_MESSAGE_END
+            yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': message_id})}\n\n"
+            
+            # Evento RUN_FINISHED
+            yield f"data: {json.dumps({'type': 'RUN_FINISHED', 'runId': message_id, 'threadId': user_id})}\n\n"
+        
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+        
+    except Exception as e:
+        print(f"❌ Error en chat_endpoint: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Respuesta de error en streaming
+        async def error_stream():
+            error_msg = f"Lo siento, hubo un error al procesar tu consulta: {str(e)}"
+            message_id = str(uuid.uuid4())
+            yield f"data: {json.dumps({'type': 'RUN_STARTED', 'runId': message_id, 'threadId': 'error'})}\n\n"
+            yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_START', 'messageId': message_id, 'role': 'assistant'})}\n\n"
+            yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_CONTENT', 'messageId': message_id, 'delta': error_msg})}\n\n"
+            yield f"data: {json.dumps({'type': 'TEXT_MESSAGE_END', 'messageId': message_id})}\n\n"
+            yield f"data: {json.dumps({'type': 'RUN_FINISHED', 'runId': message_id, 'threadId': 'error'})}\n\n"
+        
+        return StreamingResponse(
+            error_stream(),
+            media_type="text/event-stream"
+        )
+
+# Mantener el endpoint ADK como fallback en otra ruta (opcional)
+# add_adk_fastapi_endpoint(app, adk_fisica_agent, path="/adk")
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "agent": "AsistenteFisicaGEPA", "version": "2.0.0"}
+    return {"status": "healthy", "agent": "AsistenteFisicaGEPA", "version": "2.0.0", "tracing": "langsmith"}
 
 if __name__ == "__main__":
     import uvicorn

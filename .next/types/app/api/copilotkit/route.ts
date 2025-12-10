@@ -1,4 +1,4 @@
-// File: /media/dracero/08c67654-6ed7-4725-b74e-50f29ea60cb2/NodeProjects/agui_test/src/app/api/copilotkit/route.ts
+// File: /home/cetec/AIProjects/agui_test/src/app/api/copilotkit/route.ts
 import * as entry from '../../../../../src/app/api/copilotkit/route.js'
 import type { NextRequest } from 'next/server.js'
 

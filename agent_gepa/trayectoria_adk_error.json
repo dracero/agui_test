@@ -1,0 +1,6 @@
+{
+  "error": "'NoneType' object is not subscriptable",
+  "traceback": "Traceback (most recent call last):\n  File \"/home/cetec/AIProjects/agui_test/agent_gepa/agent.py\", line 725, in iniciar_flujo\nTypeError: 'NoneType' object is not subscriptable\n",
+  "pasos_completados": [],
+  "timestamp": "2025-12-10 14:18:48"
+}
