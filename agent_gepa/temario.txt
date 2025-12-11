@@ -1,22 +1,32 @@
-Puedo contestarte sobre los siguientes contenidos, basados en el índice proporcionado:
+Basándome en el contenido proporcionado, puedo contestar preguntas sobre los siguientes temas de Dinámica de la partícula:
 
-1.  Introducción a la Dinámica del Cuerpo Rígido.
-2.  Resultado de trasladar una fuerza al Centro de Masa (CM).
-3.  Cupla o par de fuerzas.
-4.  Resultante de un sistema de fuerzas y torques aplicados a un Cuerpo Rígido (CR).
-5.  Momento cinético de un CR en rotación.
-6.  Cálculo del momento de inercia baricéntrico de un cilindro respecto de un eje perpendicular a su eje de simetría.
-7.  Teorema de Steiner o de los ejes paralelos.
-8.  Cálculo del momento cinético respecto a un eje cualquiera. Expresión del torque respecto al CM.
-9.  Momento cinético relativo al Centro Instantáneo de Rotación (CIR). Expresión del torque respecto al CIR.
-10. Los momentos de inercia son aditivos y sustractivos.
-11. Momentos de inercia baricéntricos de cuerpos no homogéneos y/o no simétricos.
-12. Péndulo físico.
-13. Energía en el CR.
-14. Trabajo y energía para el CR.
-15. Ecuaciones fundamentales de la dinámica del CR.
-16. Acerca de la fuerza de rozamiento.
-17. Aplicaciones de dinámica del CR.
-18. Situación problemática de integración metodológica.
+*   **Introducción a la Dinámica:**
+    *   Contexto histórico (Galileo, Newton).
+    *   Naturaleza de las Leyes de Newton (principios, postulados).
+    *   Consideraciones introductorias:
+        *   Movimiento y cambio de movimiento (relación con cinemática, aceleración, masa).
+        *   Proporcionalidad vectorial (producto escalar por vector).
+        *   Concepto de fuerza (fuerza de interacción entre partículas).
+        *   Definición previa de masa (cantidad de materia).
 
-Además, puedo explicar conceptos como la diferencia entre el modelo de punto material y cuerpo rígido, cómo se trasladan fuerzas al CM, la definición y propiedades de una cupla, y la noción de momento de inercia como análogo rotacional de la masa.
+*   **Primera Ley de Newton: El Principio de Inercia:**
+    *   Enunciado de la ley.
+    *   Distinción entre inercia (propiedad de la materia) y el Principio de Inercia.
+    *   Consecuencias del Principio de Inercia:
+        *   Consecuencias experimentales (ejemplos cotidianos como el auto que arranca o frena).
+        *   La relatividad de la trayectoria (ejemplo de la piedra en el colectivo).
+        *   El concepto de equivalencia (reposo y movimiento rectilíneo uniforme son físicamente equivalentes).
+        *   La velocidad como función continua del tiempo.
+        *   La importancia de la "fuerza exterior" (mecánica de interacciones, no auto-fuerza).
+        *   Posibilidad de movimiento con resultante de fuerzas nula.
+        *   Relación entre inercia y masa (inicio de la definición de masa).
+
+También se mencionan los títulos de otras secciones, pero su contenido detallado no está disponible en el extracto que me has proporcionado, por lo que no podría responder preguntas específicas sobre ellos:
+
+*   Segunda ley: el Principio de Masa
+*   Tercera ley: el Principio de Interacción
+*   La interacción gravitatoria
+*   Fuerzas derivadas de interacciones eléctricas: la fuerza elástica
+*   Fuerzas derivadas de interacciones eléctricas: la fuerza de rozamiento
+*   Fuerzas derivadas de interacciones eléctricas: la tensión
+*   Apéndice

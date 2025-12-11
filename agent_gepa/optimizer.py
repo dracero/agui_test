@@ -36,8 +36,8 @@ class QdrantSearcher:
         self.qdrant_api_key = os.getenv("QDRANT_KEY")
         self.collection_name = os.getenv("QDRANT_COLLECTION_NAME", "documentos_pdf")
         
-        # Initialize embedding model (same as agent.py)
-        self.model_name = "sentence-transformers/all-MiniLM-L6-v2"
+        # Initialize embedding model (same as agent.py - Spanish fine-tuned)
+        self.model_name = "jaimevera1107/all-MiniLM-L6-v2-similarity-es"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModel.from_pretrained(self.model_name).to("cpu")
         

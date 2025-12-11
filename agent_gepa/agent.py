@@ -57,19 +57,15 @@ def setup_langsmith_environment():
     for key, value in langsmith_config.items():
         if value:
             os.environ[key] = value
-            print(f"✅ {key} configurado")
     
     try:
         from langsmith import traceable, Client
         
         client = Client()
-        print(f"🔗 Conectado a LangSmith - Proyecto: {os.environ.get('LANGCHAIN_PROJECT', 'por_defecto')}")
         
         return True, traceable, client
     
     except Exception as e:
-        print(f"⚠️ Error configurando LangSmith: {e}")
-        print("💡 El sistema funcionará sin monitoreo LangSmith")
         
         def dummy_traceable(*args, **kwargs):
             def decorator(func):
@@ -87,9 +83,8 @@ LANGSMITH_ENABLED, traceable, langsmith_client = setup_langsmith_environment()
 try:
     from openinference.instrumentation.google_adk import GoogleADKInstrumentor
     GoogleADKInstrumentor().instrument()
-    print("✅ Google ADK instrumentado para LangSmith")
 except ImportError:
-    print("ℹ️ openinference-instrumentation-google-adk no disponible (opcional)")
+    pass
 
 # Aplicar nest_asyncio para permitir loops anidados
 nest_asyncio.apply()
@@ -117,70 +112,18 @@ def medir_accion(nombre: str, tipo: str, extra_metadata: dict = None):
         
         @traceable(name=nombre, run_type="chain", metadata=metadata)
         async def async_wrapper(*args, **kwargs):
-            inicio = time.time()
-            print(f"\n{'='*60}")
-            print(f"🎯 ACCIÓN: {nombre} | TIPO: {tipo}")
-            print(f"⏰ Inicio: {time.strftime('%H:%M:%S')}")
-            print(f"{'='*60}")
-            
             try:
-                # Loguear inputs (sin exponer API keys)
-                inputs_log = {k: str(v)[:100] for k, v in kwargs.items() if not any(s in k.lower() for s in ['key', 'token', 'secret'])}
-                if inputs_log:
-                    print(f"📥 Inputs: {inputs_log}")
-                
                 result = await func(*args, **kwargs)
-                
-                tiempo = time.time() - inicio
-                
-                # Loguear outputs para trazabilidad
-                if isinstance(result, dict):
-                    # Para búsquedas de Qdrant, mostrar documentos
-                    if 'documents' in result:
-                        print(f"📤 Documentos recuperados: {result.get('num_results', 0)}")
-                        for doc in result.get('documents', [])[:5]:
-                            print(f"   📄 #{doc.get('rank', '?')} | Score: {doc.get('similarity_score', 0):.4f} | {doc.get('source', 'N/A')}")
-                    else:
-                        print(f"📤 Output (dict): {list(result.keys())}")
-                elif result:
-                    print(f"📤 Output: {str(result)[:150]}...")
-                
-                print(f"✅ Éxito | ⏱️ Tiempo: {tiempo:.2f}s")
-                print(f"{'='*60}\n")
-                
                 return result
-            
             except Exception as e:
-                tiempo = time.time() - inicio
-                print(f"❌ Error: {str(e)} | ⏱️ Tiempo: {tiempo:.2f}s")
-                print(f"{'='*60}\n")
                 raise
         
         @traceable(name=nombre, run_type="chain", metadata=metadata)
         def sync_wrapper(*args, **kwargs):
-            inicio = time.time()
-            print(f"\n{'='*60}")
-            print(f"🎯 ACCIÓN: {nombre} | TIPO: {tipo}")
-            print(f"⏰ Inicio: {time.strftime('%H:%M:%S')}")
-            print(f"{'='*60}")
-            
             try:
-                inputs_log = {k: str(v)[:100] for k, v in kwargs.items() if not any(s in k.lower() for s in ['key', 'token', 'secret'])}
-                if inputs_log:
-                    print(f"📥 Inputs: {inputs_log}")
-                
                 result = func(*args, **kwargs)
-                
-                tiempo = time.time() - inicio
-                print(f"✅ Éxito | ⏱️ Tiempo: {tiempo:.2f}s")
-                print(f"{'='*60}\n")
-                
                 return result
-            
             except Exception as e:
-                tiempo = time.time() - inicio
-                print(f"❌ Error: {str(e)} | ⏱️ Tiempo: {tiempo:.2f}s")
-                print(f"{'='*60}\n")
                 raise
         
         # Retornar wrapper apropiado según tipo de función
@@ -208,7 +151,7 @@ class AsistenteFisica:
         self.temario = ""
         self.contenido_completo = ""
 
-        self.model_name = "sentence-transformers/all-MiniLM-L6-v2"
+        self.model_name = "jaimevera1107/all-MiniLM-L6-v2-similarity-es"
         self.embeddings = None
 
         self.qdrant_url = os.getenv("QDRANT_URL")
@@ -230,13 +173,9 @@ class AsistenteFisica:
             "requests": []
         }
 
-        print("✅ AsistenteFisica inicializado correctamente")
-
     def _setup_apis(self):
         """Configurar las APIs necesarias"""
-        if not os.getenv("GOOGLE_API_KEY"):
-            print("⚠️ GOOGLE_API_KEY no encontrada en variables de entorno")
-        print("✅ APIs configuradas")
+        pass  # Configuración silenciosa
     
     def _get_qdrant_client(self):
         """Obtener cliente Qdrant reutilizable"""
@@ -280,27 +219,33 @@ class AsistenteFisica:
             "total_tokens": total_tokens
         })
         
-        print(f"\n📊 TOKENS [{paso}] - Modelo: {modelo}")
-        print(f"   ├─ Input:  {input_tokens:,} tokens")
-        print(f"   ├─ Output: {output_tokens:,} tokens")
-        print(f"   └─ Total:  {total_tokens:,} tokens")
-        print(f"   📈 Acumulado: {self.token_stats['total_input_tokens']:,} in / {self.token_stats['total_output_tokens']:,} out")
-        
         return {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens}
     
-    @traceable(name="llm_call", run_type="llm")
     async def _call_llm_traced(self, agent_name: str, system_prompt: str, user_prompt: str) -> dict:
         """
         Llamar al LLM con tracing completo para LangSmith.
         Retorna la respuesta y metadata de tokens.
         """
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt)
-        ]
+        # Wrapper interno con traceable dinámico para capturar el nombre del agente
+        @traceable(
+            name=f"llm_call_{agent_name}", 
+            run_type="llm",
+            metadata={
+                "agent_name": agent_name,
+                "model": "gemini-2.5-flash",
+                "system_prompt_length": len(system_prompt),
+                "user_prompt_length": len(user_prompt)
+            }
+        )
+        async def _traced_invoke(system_msg: str, user_msg: str) -> dict:
+            messages = [
+                SystemMessage(content=system_msg),
+                HumanMessage(content=user_msg)
+            ]
+            return await self.llm.ainvoke(messages)
         
-        # Llamar al LLM de LangChain (automáticamente traceado)
-        response = await self.llm.ainvoke(messages)
+        # Llamar al LLM con tracing (automáticamente anidado en el parent trace)
+        response = await _traced_invoke(system_prompt, user_prompt)
         
         # Extraer información de tokens si está disponible
         token_usage = {}
@@ -329,10 +274,7 @@ class AsistenteFisica:
             **token_usage
         })
         
-        print(f"\n📊 TOKENS [{agent_name}] - LangSmith Traced")
-        print(f"   ├─ Input:  {token_usage['input_tokens']:,} tokens")
-        print(f"   ├─ Output: {token_usage['output_tokens']:,} tokens")
-        print(f"   └─ Total:  {token_usage['total_tokens']:,} tokens")
+
         
         return {
             "content": response.content,
@@ -346,7 +288,6 @@ class AsistenteFisica:
         self._inicializar_memoria()
         self._inicializar_adk()
         self._inicializar_modelo_embedding()
-        print("✅ Todos los componentes inicializados")
 
     def _inicializar_modelos(self):
         """Inicializar los modelos de lenguaje (DSPy y LangChain)"""
@@ -359,15 +300,12 @@ class AsistenteFisica:
 
         self.llm = ChatGoogleGenerativeAI(**gemini_config)
 
-        lm = dspy.LM(model="gemini/gemini-2.5-flash", api_key=os.getenv("GOOGLE_API_KEY"))  # CORREGIDO
+        lm = dspy.LM(model="gemini/gemini-2.5-flash", api_key=os.getenv("GOOGLE_API_KEY"))
         dspy.settings.configure(lm=lm)
-
-        print("✅ Modelos inicializados (LangChain + DSPy)")
 
     def _inicializar_memoria(self):
         """Inicializar la memoria semántica"""
         self.memoria_semantica = self.SemanticMemory(llm=self.llm)
-        print("✅ Memoria semántica inicializada")
 
     class SemanticMemory:
         def __init__(self, llm, max_entries=10):
@@ -430,7 +368,6 @@ class AsistenteFisica:
                     self.summary = f"Interacciones recientes:{self.direct_history}"
                     
             except Exception as e:
-                print(f"Error al actualizar resumen: {e}")
                 self.summary = f"Interacciones recientes:{self.direct_history}"
 
         def get_context(self):
@@ -441,7 +378,6 @@ class AsistenteFisica:
         """Inicializar componentes ADK"""
         self.session_service = InMemorySessionService()
         self._crear_agentes()
-        print("✅ Componentes ADK inicializados")
 
     def _dspy_to_instruction(self, predictor, description_override=None):
         """
@@ -491,11 +427,8 @@ class AsistenteFisica:
         if os.path.exists(optimization_file):
             try:
                 self.rag_module.responder.load(optimization_file)
-                print(f"✅ Se cargó la optimización de Respondedor desde '{optimization_file}'")
             except Exception as e:
-                print(f"⚠️ Error cargando optimización (usando default): {e}")
-        else:
-            print("ℹ️ No se encontró 'optimized_responder.json', usando modelo base.")
+                pass
         
         instruction_classifier = self._dspy_to_instruction(self.rag_module.classifier)
         instruction_searcher = self._dspy_to_instruction(self.rag_module.search_generator)
@@ -527,15 +460,14 @@ class AsistenteFisica:
             'search': self.search_agent,
             'response': self.response_agent
         }
-        print("✅ Agentes ADK creados correctamente (con optimización DSPy GEPA)")
 
     def _inicializar_modelo_embedding(self):
-        """Inicializar el modelo de embeddings"""
+        """Inicializar el modelo de embeddings con batch_size optimizado"""
         self.embeddings = HuggingFaceEmbeddings(
             model_name=self.model_name,
-            model_kwargs={'device': 'cpu'}
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'batch_size': 32, 'normalize_embeddings': True}
         )
-        print("✅ Modelo de embeddings inicializado (HuggingFaceEmbeddings - CPU forced)")
 
     def leer_pdf(self, nombre_archivo):
         """Leer contenido de un archivo PDF"""
@@ -543,12 +475,11 @@ class AsistenteFisica:
             reader = PdfReader(nombre_archivo)
             return "".join(page.extract_text() for page in reader.pages)
         except Exception as e:
-            print(f"Error al leer {nombre_archivo}: {e}")
             return ""
 
     @medir_accion("procesar_temario", "procesamiento", {"formato": "pdf"})
-    def procesar_pdfs_temario(self, archivos_pdf):
-        """Procesar PDFs para extraer el temario"""
+    async def procesar_pdfs_temario(self, archivos_pdf):
+        """Procesar PDFs para extraer el temario con tracing de tokens"""
         contenido_completo = ""
 
         for archivo in archivos_pdf:
@@ -557,7 +488,6 @@ class AsistenteFisica:
                 contenido_completo += self.leer_pdf(archivo)
         
         if not contenido_completo:
-            print("⚠️ No se encontró contenido en los PDFs para extraer temario.")
             return "Temario no disponible localmente. Se usará información de la base de datos."
 
         self.contenido_completo = contenido_completo
@@ -567,10 +497,10 @@ class AsistenteFisica:
             try:
                 with open(cache_file, "r", encoding="utf-8") as f:
                     self.temario = f.read()
-                print(f"✅ Temario cargado desde cache ({cache_file})")
+                print(f"📚 Temario cargado desde cache ({cache_file})")
                 return self.temario
             except Exception as e:
-                print(f"⚠️ Error leyendo cache: {e}. Se regenerará.")
+                pass
 
         system_message = f"""
 Eres un experto profesor Física I de la Universidad de Buenos Aires.
@@ -584,27 +514,51 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
 
         user_question = "Sobre que contenidos podes contestarme"
 
-        messages = [
-            SystemMessage(content=system_message),
-            HumanMessage(content=user_question),
-        ]
-
-        ai_msg = self.llm.invoke(messages)
-        self.temario = ai_msg.content
+        # Usar _call_llm_traced para mostrar tokens y registrar en LangSmith
+        print(f"\n{'='*60}")
+        print(f"📖 GENERANDO TEMARIO - Llamada a LLM")
+        print(f"{'='*60}")
+        
+        result = await self._call_llm_traced(
+            agent_name="generador_temario",
+            system_prompt=system_message,
+            user_prompt=user_question
+        )
+        
+        self.temario = result["content"]
+        token_usage = result["token_usage"]
+        
+        print(f"\n📊 TOKENS [Generador Temario]")
+        print(f"   ├─ Input:  {token_usage['input_tokens']:,} tokens")
+        print(f"   ├─ Output: {token_usage['output_tokens']:,} tokens")
+        print(f"   └─ Total:  {token_usage['total_tokens']:,} tokens")
+        print(f"{'='*60}\n")
 
         try:
             with open(cache_file, "w", encoding="utf-8") as f:
                 f.write(self.temario)
             print(f"✅ Temario guardado en cache ({cache_file})")
         except Exception as e:
-            print(f"⚠️ Error guardando cache: {e}")
+            pass
 
-        print("✅ Temario extraído correctamente")
         return self.temario
 
-    def split_into_chunks(self, text, chunk_size=2000):
-        """Dividir texto en chunks"""
-        return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+    def split_into_chunks(self, text, chunk_size=600, overlap=100):
+        """Dividir texto en chunks con overlap para mejorar similaridad"""
+        chunks = []
+        start = 0
+        text_len = len(text)
+        
+        while start < text_len:
+            end = min(start + chunk_size, text_len)
+            chunks.append(text[start:end])
+            start += chunk_size - overlap  # Avanzar con overlap
+            
+            # Evitar chunks muy pequeños al final
+            if text_len - start < overlap:
+                break
+        
+        return chunks
 
     async def check_qdrant_has_data(self):
         """Verificar si la colección de Qdrant existe y tiene datos"""
@@ -612,15 +566,52 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
             client = self._get_qdrant_client()
             collection_info = client.get_collection(self.collection_name)
             points_count = collection_info.points_count
-            print(f"ℹ️ Colección '{self.collection_name}' encontrada con {points_count} puntos")
             return points_count > 0
         except Exception as e:
-            print(f"ℹ️ Colección '{self.collection_name}' no existe o no se puede acceder: {e}")
             return False
 
+    def clear_qdrant_collection(self):
+        """Limpiar la colección de Qdrant para re-indexar con nuevos embeddings"""
+        print(f"🧹 Iniciando limpieza de colección Qdrant: {self.collection_name}")
+        try:
+            client = self._get_qdrant_client()
+            
+            # Verificar si existe antes
+            collections = client.get_collections().collections
+            exists = any(c.name == self.collection_name for c in collections)
+            print(f"   Colección existe actualmente: {exists}")
+
+            # Intentar borrar la colección existente
+            try:
+                client.delete_collection(self.collection_name)
+                print(f"   🗑️ Colección eliminada: {self.collection_name}")
+            except Exception as e:
+                print(f"   ⚠️ No se pudo eliminar colección (quizás no existía): {e}")
+            
+            # Recrear la colección con la dimensión correcta para all-MiniLM-L6-v2-similarity-es (384)
+            print(f"   ✨ Creando nueva colección con dimensión 384...")
+            client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+            )
+            print(f"   ✅ Colección recreada exitosamente")
+            
+            # Invalidar caches
+            self._qdrant_vectorstore = None
+            
+        except Exception as e:
+            print(f"❌ Error CRÍTICO recreando colección: {e}")
+            import traceback
+            traceback.print_exc()
+
     @medir_accion("almacenar_pdfs_qdrant", "escritura_db", {"db": "qdrant"})
-    async def procesar_y_almacenar_pdfs(self, pdf_files):
+    async def procesar_y_almacenar_pdfs(self, pdf_files, force_reindex=True):
         """Procesar PDFs y almacenar en Qdrant usando LangChain"""
+        
+        # Si force_reindex, limpiar la colección primero
+        if force_reindex:
+            self.clear_qdrant_collection()
+        
         documents = []
         global_id_counter = 0
 
@@ -645,14 +636,23 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
 
         client = self._get_qdrant_client()
         
-        vectorstore = QdrantVectorStore(
-            client=client,
-            collection_name=self.collection_name,
-            embedding=self.embeddings,
-        )
+        try:
+            vectorstore = QdrantVectorStore(
+                client=client,
+                collection_name=self.collection_name,
+                embedding=self.embeddings,
+            )
+        except Exception as e:
+            print(f"⚠️ Error inicializando QdrantVectorStore: {e}")
+            print("   Intentando forzar recreación de colección...")
+            self.clear_qdrant_collection()
+            vectorstore = QdrantVectorStore(
+                client=client,
+                collection_name=self.collection_name,
+                embedding=self.embeddings,
+            )
 
         await vectorstore.aadd_documents(documents)
-        print(f"✅ {len(documents)} chunks procesados y almacenados en Qdrant (LangChain)")
         
         # Invalidar cache del vectorstore para forzar recarga
         self._qdrant_vectorstore = None
@@ -660,12 +660,6 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
     @medir_accion("busqueda_qdrant", "lectura_db", {"db": "qdrant", "tipo": "vector_search"})
     async def search_documents(self, query, top_k=5):
         """Realizar búsqueda en Qdrant usando LangChain - Con trazabilidad detallada"""
-        print(f"\n{'='*60}")
-        print(f"🔍 BÚSQUEDA QDRANT | Query: {query[:80]}...")
-        print(f"{'='*60}")
-        
-        inicio_busqueda = time.time()
-        
         try:
             # Usar cliente y vectorstore reutilizables para mejor rendimiento
             if self._qdrant_vectorstore is None:
@@ -684,10 +678,22 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
             documents_for_trace = []
             
             for idx, (doc, score) in enumerate(results):
+                # NOTA: LangChain con Qdrant COSINE retorna la DISTANCIA, no la similaridad
+                # Distancia coseno: 0 = idéntico, 1 = ortogonal, 2 = opuesto
+                # Convertimos a similaridad: similaridad = 1 - distancia (para rango 0-1 aprox)
+                # Si score > 1, usamos: similaridad = 1 - (score / 2) para normalizar a [0, 1]
+                if score <= 1:
+                    similarity = 1 - score  # score es distancia en rango [0, 1]
+                else:
+                    similarity = 1 - (score / 2)  # score es distancia en rango [0, 2]
+                
+                similarity = max(0, min(1, similarity))  # Clamp a [0, 1]
+                
                 doc_info = {
                     "pdf": doc.metadata.get("pdf_name", "N/A"),
                     "texto": doc.page_content,
-                    "similitud": round(score, 4)
+                    "similitud": round(similarity, 4),
+                    "distancia_original": round(score, 4)  # Mantener distancia original para debug
                 }
                 formatted_results.append(doc_info)
                 
@@ -696,32 +702,23 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
                     "rank": idx + 1,
                     "source": doc.metadata.get("pdf_name", "N/A"),
                     "chunk_id": doc.metadata.get("chunk_id", "N/A"),
-                    "similarity_score": round(score, 4),
+                    "similarity_score": round(similarity, 4),
+                    "distance": round(score, 4),  # Distancia original para transparencia
                     "content_preview": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content,
                     "content_length": len(doc.page_content)
                 })
             
-            # Log para consola y tracer
-            print(f"\n📊 RESULTADOS DE BÚSQUEDA ({len(formatted_results)} documentos):")
-            print("-" * 50)
-            for doc_trace in documents_for_trace:
-                print(f"  #{doc_trace['rank']} | Score: {doc_trace['similarity_score']:.4f} | Fuente: {doc_trace['source']}")
-                print(f"      Preview: {doc_trace['content_preview'][:100]}...")
-            print("-" * 50)
-            
             # Retorno estructurado para LangSmith (el tracer captura automáticamente el return)
-            # Agregamos metadata extra que LangSmith mostrará
             return {
                 "query": query,
                 "top_k": top_k,
                 "num_results": len(formatted_results),
                 "documents": documents_for_trace,
-                "results": formatted_results  # Para compatibilidad con el código existente
+                "results": formatted_results
             }
 
         except Exception as e:
             error_msg = f"Error en la búsqueda: {str(e)}"
-            print(f"❌ {error_msg}")
             return {
                 "query": query,
                 "top_k": top_k,
@@ -756,7 +753,6 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
             return result["content"]
 
         except Exception as e:
-            print(f"Error ejecutando agente {agent.name}: {e}")
             import traceback
             traceback.print_exc()
             
@@ -774,7 +770,6 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
                 response = await self.llm.ainvoke(messages)
                 return response.content
             except Exception as fallback_error:
-                print(f"Error en fallback para {agent.name}: {fallback_error}")
                 return f"Error procesando con {agent.name}"
 
     def _format_prompt_for_agent(self, agent_name, data):
@@ -828,17 +823,12 @@ Generate response.
         """
         Flujo completo usando AGENTES ADK con trazabilidad detallada
         """
-        print(f"\n{'='*80}")
-        print(f"📝 NUEVA CONSULTA de '{user_id}': {consulta_usuario}")
-        print(f"{'='*80}\n")
-        
         trayectoria = []
         inicio_total = time.time()
         contexto_memoria = self.memoria_semantica.get_context()
 
         try:
             # PASO 1: CLASIFICADOR
-            print(f"\n🔹 PASO 1/4: CLASIFICACIÓN")
             inicio_paso = time.time()
             
             clasificacion_data = {
@@ -877,15 +867,11 @@ Generate response.
                 "timestamp": time.strftime('%H:%M:%S')
             })
             
-            print(f"✅ [Clasificador] Completado en {tiempo_clasificacion:.2f}s")
-            print(f"   📤 Output: {str(clasificacion_raw)[:150]}...")
-            
             # Registrar tokens del clasificador
             input_text_1 = self._format_prompt_for_agent("clasificador", clasificacion_data)
             self._log_token_usage("Clasificador", input_text_1, str(clasificacion_raw))
 
             # PASO 2: GENERADOR DE BÚSQUEDA
-            print(f"\n🔹 PASO 2/4: GENERACIÓN DE BÚSQUEDA")
             inicio_paso = time.time()
             
             search_data = {
@@ -918,15 +904,11 @@ Generate response.
                 "timestamp": time.strftime('%H:%M:%S')
             })
             
-            print(f"✅ [Buscador] Query generada en {tiempo_query:.2f}s")
-            print(f"   📤 Query: {consulta_busqueda}")
-            
             # Registrar tokens del buscador
             input_text_2 = self._format_prompt_for_agent("buscador", search_data)
             self._log_token_usage("Buscador", input_text_2, str(consulta_busqueda))
 
             # PASO 3: BÚSQUEDA EN QDRANT
-            print(f"\n🔹 PASO 3/4: BÚSQUEDA VECTORIAL")
             inicio_paso = time.time()
             
             # Limpiar query (manejo de nulos seguro)
@@ -950,18 +932,13 @@ Generate response.
                 },
                 "output": {
                     "num_docs": len(resultados_busqueda),
-                    "documents_retrieved": documents_trace  # Ahora incluye info detallada para el tracer
+                    "documents_retrieved": documents_trace
                 },
                 "tiempo_segundos": round(tiempo_busqueda, 3),
                 "timestamp": time.strftime('%H:%M:%S')
             })
-            
-            print(f"✅ [Qdrant] {len(resultados_busqueda)} documentos en {tiempo_busqueda:.2f}s")
-            for i, res in enumerate(resultados_busqueda[:3], 1):
-                print(f"   📄 Doc {i}: {res['pdf']} (sim: {res['similitud']})")
 
             # PASO 4: RESPONDEDOR
-            print(f"\n🔹 PASO 4/4: GENERACIÓN DE RESPUESTA")
             inicio_paso = time.time()
             
             contexto_busqueda = "\n".join([
@@ -1001,9 +978,6 @@ Generate response.
                 "timestamp": time.strftime('%H:%M:%S')
             })
             
-            print(f"✅ [Respondedor] Respuesta generada en {tiempo_respuesta:.2f}s")
-            print(f"   📤 Preview: {str(respuesta_final)[:150]}...")
-            
             # Registrar tokens del respondedor
             input_text_4 = self._format_prompt_for_agent("respondedor", response_data)
             self._log_token_usage("Respondedor", input_text_4, str(respuesta_final))
@@ -1036,28 +1010,10 @@ Generate response.
                     json.dump(trayectoria_completa, f, indent=2, ensure_ascii=False)
             except Exception:
                 pass
-            
-            print(f"\n{'='*80}")
-            print(f"✅ FLUJO COMPLETADO en {tiempo_total:.2f}s")
-            print(f"📊 Trayectoria guardada en 'trayectoria_adk_completa.json'")
-            print(f"{'='*80}")
-            
-            # Resumen de tokens del flujo
-            print(f"\n📊 RESUMEN DE TOKENS DEL FLUJO")
-            print(f"{'='*60}")
-            for req in self.token_stats["requests"][-3:]:  # Últimas 3 solicitudes LLM
-                print(f"   └─ {req['paso']:15} | In: {req['input_tokens']:>6,} | Out: {req['output_tokens']:>6,} | Total: {req['total_tokens']:>7,}")
-            print(f"{'='*60}")
-            print(f"📈 TOTALES DE SESIÓN:")
-            print(f"   ├─ Input total:  {self.token_stats['total_input_tokens']:,} tokens")
-            print(f"   ├─ Output total: {self.token_stats['total_output_tokens']:,} tokens")
-            print(f"   └─ Gran total:   {self.token_stats['total_input_tokens'] + self.token_stats['total_output_tokens']:,} tokens")
-            print(f"{'='*80}\n")
 
             return respuesta_final
 
         except Exception as e:
-            print(f"❌ Error en el flujo ADK: {e}")
             import traceback
             traceback.print_exc()
             
@@ -1099,15 +1055,10 @@ class RAGAgent(LlmAgent):
     @traceable(name="chat_consulta_usuario", run_type="chain", metadata={"source": "web_ui", "sistema": "rag_gepa"})
     async def generate(self, prompt: str, **kwargs) -> str:
         """Método principal que procesa las consultas del usuario"""
-        print(f"\n{'='*60}")
-        print(f"💬 NUEVA CONSULTA DE USUARIO: {prompt[:100]}...")
-        print(f"{'='*60}")
         try:
             respuesta = await self.asistente.iniciar_flujo(prompt, user_id="usuario_web")
-            print(f"✅ Respuesta generada: {str(respuesta)[:100]}...")
             return respuesta
         except Exception as e:
-            print(f"❌ Error en RAGAgent.generate: {e}")
             import traceback
             traceback.print_exc()
             return f"Lo siento, hubo un error al procesar tu consulta."
@@ -1125,7 +1076,6 @@ adk_fisica_agent = ADKAgent(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Gestión del ciclo de vida de la aplicación"""
-    print("🚀 Iniciando Asistente de Física (GEPA Optimized)...")
     asistente.inicializar_componentes()
     
     try:
@@ -1141,37 +1091,29 @@ async def lifespan(app: FastAPI):
         
         if archivos_pdf:
             try:
-                print(f"📖 Procesando {len(archivos_pdf)} archivos PDF en '{dir_pdf}'...")
-                asistente.procesar_pdfs_temario(archivos_pdf)
+                await asistente.procesar_pdfs_temario(archivos_pdf)
                 await asistente.procesar_y_almacenar_pdfs(archivos_pdf)
-                print("✅ PDFs procesados y cargados exitosamente")
             except Exception as e:
-                print(f"❌ Error al procesar PDFs: {e}")
                 import traceback
                 traceback.print_exc()
                 if not asistente.temario:
                     asistente.temario = "Física I - UBA (Error al cargar PDFs)"
         else:
-            print(f"ℹ️ No se encontraron archivos PDF en '{dir_pdf}'. Se usará conocimiento existente.")
             try:
                 has_data = await asistente.check_qdrant_has_data()
                 if has_data:
                     asistente.temario = "Física I - UBA (Datos en Qdrant)"
-                    print("✅ Se detectaron datos previos en Qdrant.")
                 else:
                     asistente.temario = "Física I - UBA (Sin datos)"
             except:
                 pass
 
     except Exception as e:
-        print(f"❌ Error durante la inicialización: {e}")
         import traceback
         traceback.print_exc()
         asistente.temario = "Física I - UBA"
     
-    print("✅ Backend GEPA listo")
     yield
-    print("👋 Apagando Asistente...")
 
 app = FastAPI(
     title="Asistente de Física I - GEPA",
@@ -1224,17 +1166,7 @@ async def chat_endpoint(request: Request):
             # Fallback: buscar en otras estructuras posibles
             user_message = body.get("message", body.get("query", body.get("input", "")))
         
-        if not user_message:
-            print("⚠️ No se encontró mensaje del usuario en la solicitud")
-            print(f"📦 Body recibido: {json.dumps(body, indent=2)[:500]}")
-        
         user_id = body.get("user_id", body.get("threadId", "usuario_web"))
-        
-        print(f"\n{'='*60}")
-        print(f"📨 SOLICITUD RECIBIDA")
-        print(f"👤 User ID: {user_id}")
-        print(f"💬 Mensaje: {user_message[:100]}...")
-        print(f"{'='*60}\n")
         
         # Ejecutar el flujo RAG completo con tracing
         respuesta = await asistente.iniciar_flujo(user_message, user_id=user_id)
@@ -1269,7 +1201,6 @@ async def chat_endpoint(request: Request):
         )
         
     except Exception as e:
-        print(f"❌ Error en chat_endpoint: {e}")
         import traceback
         traceback.print_exc()
         
