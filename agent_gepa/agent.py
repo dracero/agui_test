@@ -16,14 +16,14 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from PyPDF2 import PdfReader
 from qdrant_client import AsyncQdrantClient, QdrantClient
-from qdrant_client.models import PointStruct, VectorParams, Distance
+from qdrant_client.models import PointStruct, VectorParams, Distance, MultiVectorConfig, MultiVectorComparator
 from transformers import AutoTokenizer, AutoModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_qdrant import QdrantVectorStore
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings.fastembed import FastEmbedEmbeddings
 from langchain_core.documents import Document
 
 # Imports de Google ADK
@@ -40,6 +40,36 @@ try:
     from .dspy_modules import RAGModule
 except ImportError:
     from dspy_modules import RAGModule
+
+# Imports for Custom Embeddings
+from typing import List
+from fastembed import LateInteractionTextEmbedding
+from langchain_core.embeddings import Embeddings
+
+class FastEmbedColbertEmbeddings(Embeddings):
+    """
+    Custom Embeddings class for Late Interaction (ColBERT) models using FastEmbed.
+    Generates multi-vector embeddings.
+    """
+    def __init__(self, model_name: str = "colbert-ir/colbertv2.0", batch_size: int = 32):
+        self.model = LateInteractionTextEmbedding(model_name=model_name)
+        self.batch_size = batch_size
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """
+        Embed documents. Returns a list of multivectors.
+        Note: FastEmbed returns generators, we iterate to consume them.
+        Each document embedding is a list of vectors (float lists).
+        """
+        embeddings_generator = self.model.embed(texts, batch_size=self.batch_size)
+        return [list(emb) for emb in embeddings_generator]
+
+    def embed_query(self, text: str) -> List[float]:
+        """
+        Embed query. Returns a multivector for the query.
+        """
+        embedding_generator = self.model.query_embed(text)
+        return list(next(embedding_generator))
 
 # ============================================================================
 # CONFIGURACIÓN DE LANGSMITH (TELEMETRÍA)
@@ -151,7 +181,7 @@ class AsistenteFisica:
         self.temario = ""
         self.contenido_completo = ""
 
-        self.model_name = "jaimevera1107/all-MiniLM-L6-v2-similarity-es"
+        self.model_name = "Qdrant/colbert-ir/colbertv2.0"
         self.embeddings = None
 
         self.qdrant_url = os.getenv("QDRANT_URL")
@@ -183,7 +213,8 @@ class AsistenteFisica:
             self._qdrant_client = QdrantClient(
                 url=self.qdrant_url, 
                 api_key=self.qdrant_api_key, 
-                check_compatibility=False
+                check_compatibility=False,
+                timeout=60  # Aumentar timeout por defecto
             )
         return self._qdrant_client
     
@@ -461,12 +492,13 @@ class AsistenteFisica:
             'response': self.response_agent
         }
 
+
     def _inicializar_modelo_embedding(self):
         """Inicializar el modelo de embeddings con batch_size optimizado"""
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name=self.model_name,
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'batch_size': 32, 'normalize_embeddings': True}
+        # Usar Custom FastEmbedColbertEmbeddings para Late Interaction support
+        self.embeddings = FastEmbedColbertEmbeddings(
+            model_name="colbert-ir/colbertv2.0",
+            batch_size=32,
         )
 
     def leer_pdf(self, nombre_archivo):
@@ -508,7 +540,7 @@ Tu tarea es responder preguntas sobre el temario que tiene en los archivos que l
 Responde solo con el contenido, si no está en el contenido di que no tienes eso en tu base de datos.
 Utiliza el siguiente contenido como referencia para tus respuestas:
 ---
-{self.contenido_completo[:10000]}... (truncado para evitar límite de tokens)
+{self.contenido_completo}
 ---
 """
 
@@ -571,8 +603,8 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
             return False
 
     def clear_qdrant_collection(self):
-        """Limpiar la colección de Qdrant para re-indexar con nuevos embeddings"""
-        print(f"🧹 Iniciando limpieza de colección Qdrant: {self.collection_name}")
+        """Limpiar la colección de Qdrant para re-indexar conn ColBERT/MUVERA"""
+        print(f"🧹 Iniciando limpieza de colección Qdrant (MUVERA): {self.collection_name}")
         try:
             client = self._get_qdrant_client()
             
@@ -588,13 +620,20 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
             except Exception as e:
                 print(f"   ⚠️ No se pudo eliminar colección (quizás no existía): {e}")
             
-            # Recrear la colección con la dimensión correcta para all-MiniLM-L6-v2-similarity-es (384)
-            print(f"   ✨ Creando nueva colección con dimensión 384...")
+            # Recrear la colección configurada para ColBERT (Multi-Vector)
+            # ColBERT usa vectores de dimensión 128 y requiere MultiVectorConfig
+            print(f"   ✨ Creando nueva colección Multi-Vector (ColBERT) con dimensión 128...")
             client.create_collection(
                 collection_name=self.collection_name,
-                vectors_config=VectorParams(size=384, distance=Distance.COSINE)
+                vectors_config=VectorParams(
+                    size=128, 
+                    distance=Distance.COSINE,
+                    multivector_config=MultiVectorConfig(
+                        comparator=MultiVectorComparator.MAX_SIM
+                    )
+                )
             )
-            print(f"   ✅ Colección recreada exitosamente")
+            print(f"   ✅ Colección recreada exitosamente para ColBERT")
             
             # Invalidar caches
             self._qdrant_vectorstore = None
@@ -606,13 +645,16 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
 
     @medir_accion("almacenar_pdfs_qdrant", "escritura_db", {"db": "qdrant"})
     async def procesar_y_almacenar_pdfs(self, pdf_files, force_reindex=True):
-        """Procesar PDFs y almacenar en Qdrant usando LangChain"""
+        """Procesar PDFs y almacenar en Qdrant usando multivectores (ColBERT) manualmente"""
         
         # Si force_reindex, limpiar la colección primero
         if force_reindex:
             self.clear_qdrant_collection()
         
         documents = []
+        texts = []
+        metadatas = []
+        
         global_id_counter = 0
 
         for pdf_file in pdf_files:
@@ -623,87 +665,124 @@ Utiliza el siguiente contenido como referencia para tus respuestas:
             if text:
                 chunks = self.split_into_chunks(text)
                 for i, chunk in enumerate(chunks):
-                    metadata = {
+                    meta = {
                         "pdf_name": pdf_file,
                         "chunk_id": i,
-                        "global_id": global_id_counter
+                        "global_id": global_id_counter,
+                        "text": chunk
                     }
-                    documents.append(Document(page_content=chunk, metadata=metadata))
+                    metadatas.append(meta)
+                    texts.append(chunk)
                     global_id_counter += 1
 
-        if not documents:
+        if not texts:
             return
 
         client = self._get_qdrant_client()
         
-        try:
-            vectorstore = QdrantVectorStore(
-                client=client,
-                collection_name=self.collection_name,
-                embedding=self.embeddings,
-            )
-        except Exception as e:
-            print(f"⚠️ Error inicializando QdrantVectorStore: {e}")
-            print("   Intentando forzar recreación de colección...")
-            self.clear_qdrant_collection()
-            vectorstore = QdrantVectorStore(
-                client=client,
-                collection_name=self.collection_name,
-                embedding=self.embeddings,
-            )
-
-        await vectorstore.aadd_documents(documents)
+        print(f"⚡ Generando embeddings ColBERT para {len(texts)} chunks...")
+        # Generar embeddings usando nuestra clase custom (devuelve lista de listas de float)
+        # embed_documents devuelve List[List[List[float]]] -> [Doc1Multivector, Doc2Multivector...]
+        multivectors_list = self.embeddings.embed_documents(texts)
         
-        # Invalidar cache del vectorstore para forzar recarga
+        points = []
+        for idx, (multivector, meta) in enumerate(zip(multivectors_list, metadatas)):
+            # Qdrant espera PointStruct con vector=multivector (List[List[float]])
+            points.append(PointStruct(
+                id=idx,
+                vector=multivector,
+                payload=meta
+            ))
+            
+        print(f"💾 Subiendo {len(points)} puntos a Qdrant...")
+        # Subir en lotes para evitar timeout (ColBERT multivectors son pesados)
+        batch_size = 10  # Reducido de 50 a 10 para evitar timeouts
+        for i in range(0, len(points), batch_size):
+            batch = points[i:i+batch_size]
+            try:
+                client.upsert(
+                    collection_name=self.collection_name,
+                    points=batch
+                )
+            except Exception as e:
+                print(f"⚠️ Error subiendo lote {i}: {e}")
+                # Reintentar una vez con delay
+                import time
+                time.sleep(2)
+                client.upsert(
+                    collection_name=self.collection_name,
+                    points=batch
+                )
+            
+        print(f"✅ Almacenamiento completado en colección {self.collection_name}")
+        
+        # Invalidar cache del vectorstore (aunque ya no lo usamos para esto, por consistencia)
         self._qdrant_vectorstore = None
 
     @medir_accion("busqueda_qdrant", "lectura_db", {"db": "qdrant", "tipo": "vector_search"})
     async def search_documents(self, query, top_k=5):
-        """Realizar búsqueda en Qdrant usando LangChain - Con trazabilidad detallada"""
+        """Realizar búsqueda en Qdrant usando ColBERT y cliente directo"""
         try:
-            # Usar cliente y vectorstore reutilizables para mejor rendimiento
-            if self._qdrant_vectorstore is None:
-                self._qdrant_vectorstore = QdrantVectorStore(
-                    client=self._get_qdrant_client(),
-                    collection_name=self.collection_name,
-                    embedding=self.embeddings,
-                )
+            client = self._get_qdrant_client()
             
-            vectorstore = self._qdrant_vectorstore
-
-            results = await vectorstore.asimilarity_search_with_score(query, k=top_k)
+            # Generar embedding para la query
+            # embed_query devuelve List[float] (flattened? No, nuestra clase devuelve List[float] pero ColBERT query es multivector)
+            # Espera, embed_query en nuestra clase hace:
+            # embedding_generator = self.model.query_embed(text)
+            # return list(next(embedding_generator))
+            # Eso devuelve un multivector (lista de vectores), PERO la firma de Embeddings dice List[float].
+            # Aquí lo llamaremos directo si es posible, o usamos el resultado sabiendo que es una lista de listas.
+            
+            # Generamos el query vector (multivector)
+            query_vector = self.embeddings.embed_query(query)
+            # query_vector es List[List[float]] realmente, aunque type hint diga List[float]
+            
+            # Búsqueda usando query_points (necesario para search multivector eficiente)
+            search_result = client.query_points(
+                collection_name=self.collection_name,
+                query=query_vector,
+                limit=top_k
+            ).points
+            
+            # Adaptamos para que el resto del código lo entienda como (doc, score)
+            results = []
+            for point in search_result:
+                # Reconstruir objeto Document simulado
+                payload = point.payload or {}
+                content = payload.get("text", "")
+                # Eliminamos 'text' del metadata para no duplicarlo
+                metadata = {k:v for k,v in payload.items() if k != 'text'}
+                
+                doc = Document(page_content=content, metadata=metadata)
+                score = point.score
+                results.append((doc, score))
 
             # Formatear resultados con información completa para el tracer
             formatted_results = []
             documents_for_trace = []
             
             for idx, (doc, score) in enumerate(results):
-                # NOTA: LangChain con Qdrant COSINE retorna la DISTANCIA, no la similaridad
-                # Distancia coseno: 0 = idéntico, 1 = ortogonal, 2 = opuesto
-                # Convertimos a similaridad: similaridad = 1 - distancia (para rango 0-1 aprox)
-                # Si score > 1, usamos: similaridad = 1 - (score / 2) para normalizar a [0, 1]
-                if score <= 1:
-                    similarity = 1 - score  # score es distancia en rango [0, 1]
-                else:
-                    similarity = 1 - (score / 2)  # score es distancia en rango [0, 2]
-                
-                similarity = max(0, min(1, similarity))  # Clamp a [0, 1]
+                # Con ColBERT/MUVERA y Qdrant, el score es MaxSim (suma de similitudes máximas)
+                # No es una distancia, y puede ser mayor a 1.
+                # Cuanto mayor, más similar.
+                similarity = score
                 
                 doc_info = {
                     "pdf": doc.metadata.get("pdf_name", "N/A"),
                     "texto": doc.page_content,
                     "similitud": round(similarity, 4),
-                    "distancia_original": round(score, 4)  # Mantener distancia original para debug
+                    "score_colbert": round(score, 4)
                 }
                 formatted_results.append(doc_info)
                 
+                # Información detallada para el tracer
                 # Información detallada para el tracer
                 documents_for_trace.append({
                     "rank": idx + 1,
                     "source": doc.metadata.get("pdf_name", "N/A"),
                     "chunk_id": doc.metadata.get("chunk_id", "N/A"),
                     "similarity_score": round(similarity, 4),
-                    "distance": round(score, 4),  # Distancia original para transparencia
+                    "colbert_score": round(score, 4),  # Score original (MaxSim)
                     "content_preview": doc.page_content[:300] + "..." if len(doc.page_content) > 300 else doc.page_content,
                     "content_length": len(doc.page_content)
                 })
@@ -1092,7 +1171,14 @@ async def lifespan(app: FastAPI):
         if archivos_pdf:
             try:
                 await asistente.procesar_pdfs_temario(archivos_pdf)
-                await asistente.procesar_y_almacenar_pdfs(archivos_pdf)
+                
+                # Verificar si ya existen datos en Qdrant para evitar re-indexación innecesaria
+                has_data = await asistente.check_qdrant_has_data()
+                if not has_data:
+                    print("📂 Procesando PDFs e indexando en Qdrant...")
+                    await asistente.procesar_y_almacenar_pdfs(archivos_pdf, force_reindex=True)
+                else:
+                    print("✅ Datos encontrados en Qdrant. Omitiendo re-indexación automática.")
             except Exception as e:
                 import traceback
                 traceback.print_exc()

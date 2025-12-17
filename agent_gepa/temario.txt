@@ -1,32 +1,110 @@
-Basándome en el contenido proporcionado, puedo contestar preguntas sobre los siguientes temas de Dinámica de la partícula:
+Como tu profesor experto en Física I de la UBA, puedo responder preguntas basándome exclusivamente en el contenido de los apuntes que me has proporcionado. Mi base de datos incluye los siguientes temas principales:
 
-*   **Introducción a la Dinámica:**
-    *   Contexto histórico (Galileo, Newton).
-    *   Naturaleza de las Leyes de Newton (principios, postulados).
-    *   Consideraciones introductorias:
-        *   Movimiento y cambio de movimiento (relación con cinemática, aceleración, masa).
-        *   Proporcionalidad vectorial (producto escalar por vector).
-        *   Concepto de fuerza (fuerza de interacción entre partículas).
-        *   Definición previa de masa (cantidad de materia).
+**1. Cinemática:**
+*   **Cinemática de la Partícula:**
+    *   Magnitudes escalares y vectoriales, componentes de un vector.
+    *   Análisis del movimiento en 3D, posición, velocidad y aceleración instantánea.
+    *   Sistemas de referencia (fijos y móviles), sistemas de coordenadas (cartesianas, polares, intrínsecas).
+    *   Trayectoria, versor tangente y normal, circunferencia osculatriz y radio de curvatura.
+*   **Cinemática del Cuerpo Rígido (CR):**
+    *   Determinación del Centro de Masa (CM).
+    *   Movimientos de roto-traslación, traslación pura y rotación pura.
+    *   Condición de rigidez.
+    *   Diagramas vectoriales de velocidades y aceleraciones.
+    *   Centro Instantáneo de Rotación (CIR).
 
-*   **Primera Ley de Newton: El Principio de Inercia:**
-    *   Enunciado de la ley.
-    *   Distinción entre inercia (propiedad de la materia) y el Principio de Inercia.
-    *   Consecuencias del Principio de Inercia:
-        *   Consecuencias experimentales (ejemplos cotidianos como el auto que arranca o frena).
-        *   La relatividad de la trayectoria (ejemplo de la piedra en el colectivo).
-        *   El concepto de equivalencia (reposo y movimiento rectilíneo uniforme son físicamente equivalentes).
-        *   La velocidad como función continua del tiempo.
-        *   La importancia de la "fuerza exterior" (mecánica de interacciones, no auto-fuerza).
-        *   Posibilidad de movimiento con resultante de fuerzas nula.
-        *   Relación entre inercia y masa (inicio de la definición de masa).
+**2. Dinámica:**
+*   **Dinámica de la Partícula:**
+    *   Introducción a la dinámica y las Leyes de Newton (Principio de Inercia, Principio de Masa, Principio de Interacción).
+    *   Conceptos de inercia y masa (inercial y gravitatoria).
+    *   Interacción gravitatoria (peso, ley de gravitación universal, velocidad de escape).
+    *   Fuerzas derivadas de interacciones eléctricas (fuerza elástica, fuerza de rozamiento, tensión).
+    *   Impulso y cantidad de movimiento, Teorema de Conservación de la Cantidad de Movimiento.
+    *   Principio de Equivalencia Débil.
+*   **Dinámica de Sistemas de Partículas (SP):**
+    *   Modelo de sistema de partículas, Centro de Masa (CM), velocidad y aceleración del CM.
+    *   Ecuaciones fundamentales de la dinámica de un SP (fuerzas internas y externas).
+    *   Impulso y cantidad de movimiento del SP, conservación de la cantidad de movimiento.
+    *   Momento angular y torque para un SP (momento cinético orbital y de spin).
+    *   Trabajo y energía en un SP (energía potencial gravitatoria, energía cinética).
+    *   Colisiones o choques mecánicos (perfectamente inelásticos, elásticos, inelásticos, explosiones).
+    *   Coeficiente de restitución.
+*   **Dinámica del Cuerpo Rígido (CR):**
+    *   Traslado de fuerzas al CM, cupla o par de fuerzas.
+    *   Resultante de un sistema de fuerzas y torques.
+    *   Momento cinético de un CR en rotación, momento de inercia (baricéntrico, Teorema de Steiner).
+    *   Momento cinético respecto al CIR.
+    *   Péndulo físico (período, longitud reducida).
+    *   Energía en el CR (cinética de traslación y rotación).
+    *   Trabajo y energía para el CR.
+    *   Ecuaciones fundamentales de la dinámica del CR.
+    *   Análisis de la fuerza de rozamiento en CR (deslizamiento y rodadura sin deslizar).
+*   **Dinámica Impulsiva del Cuerpo Rígido (CR):**
+    *   Concepto de impulso en CR.
+    *   Centro de percusión (para cuerpos apoyados y suspendidos).
+    *   Radio de giro baricéntrico.
+*   **Sistemas de Referencia No Inerciales (SNI):**
+    *   Diferencia entre sistemas inerciales (SI) y no inerciales (SNI).
+    *   Fuerzas ficticias (de inercia o pseudofuerzas).
+    *   Ejemplos de aplicación (péndulo ideal, péndulo en carrito, sistemas de cuerpos en carrito).
 
-También se mencionan los títulos de otras secciones, pero su contenido detallado no está disponible en el extracto que me has proporcionado, por lo que no podría responder preguntas específicas sobre ellos:
+**3. Trabajo y Energía:**
+*   Definición de trabajo mecánico (integral de línea).
+*   Potencia.
+*   Energía potencial y fuerzas conservativas (fuerzas centrales, energía potencial gravitatoria y elástica).
+*   Energía cinética, Teorema de las Fuerzas Vivas.
+*   Teorema del Trabajo y la Energía Mecánica (fuerzas no conservativas y disipativas).
 
-*   Segunda ley: el Principio de Masa
-*   Tercera ley: el Principio de Interacción
-*   La interacción gravitatoria
-*   Fuerzas derivadas de interacciones eléctricas: la fuerza elástica
-*   Fuerzas derivadas de interacciones eléctricas: la fuerza de rozamiento
-*   Fuerzas derivadas de interacciones eléctricas: la tensión
-*   Apéndice
+**4. Ondas Mecánicas:**
+*   Introducción al movimiento ondulatorio (propagación de energía y cantidad de movimiento sin desplazamiento neto de materia).
+*   Características y clasificación de las ondas (mecánicas/electromagnéticas, longitudinales/transversales, unidimensionales/bidimensionales/tridimensionales, viajeras/estacionarias).
+*   Ecuación general del movimiento ondulatorio y sus soluciones (onda armónica, número de onda, longitud de onda, frecuencia angular, período, amplitud, fase inicial).
+*   Ondas transversales en una cuerda (velocidad de propagación).
+*   Ondas longitudinales en una varilla (módulo de Young, velocidad de propagación).
+*   Energía de las ondas (energía cinética y elástica, densidad de energía, potencia, intensidad).
+*   Nivel de intensidad (decibeles).
+*   Superposición de ondas (igual frecuencia/amplitudes diferentes, frecuencias parecidas/batido).
+*   Ondas estacionarias (nodos, antinodos, modos de vibración, frecuencias naturales, armónicos).
+*   Resonancia.
+*   Efecto Doppler (para sonido).
+
+**5. Óptica:**
+*   **Óptica Geométrica:**
+    *   Leyes fundamentales (propagación rectilínea, reflexión, refracción).
+    *   Definiciones (objeto, imagen, real, virtual).
+    *   Espejos planos (formación de imágenes, campo del espejo).
+    *   Espejos esféricos (cóncavos y convexos, aproximación paraxial, fórmula de Descartes, focos, agrandamiento lateral, formación de imágenes).
+    *   Reflexión total y ángulo límite.
+    *   Dioptras esféricas (fórmula de Descartes, aumento lateral).
+    *   Lentes gruesas y delgadas (ecuación del constructor de lentes, focos, aumento lateral, potencia en dioptrías, formación de imágenes).
+*   **Óptica Física:**
+    *   Principio de Huygens.
+    *   Concepto de coherencia.
+    *   Interferencia (Experiencia de Young, interferencia para N fuentes, intensidad).
+    *   Difracción (por una ranura, expresión de la intensidad).
+    *   Redes de difracción (superposición de interferencia y difracción).
+    *   Apéndice histórico (teoría ondulatoria vs. corpuscular, Principio de Fermat).
+
+**6. Hidrodinámica:**
+*   Conceptos previos (fluido ideal, incompresible, densidad, presión, hidrostática).
+*   Flujo del fluido ideal (líneas y tubos de corriente, flujo estacionario).
+*   Caudal y caudal másico.
+*   Teorema de continuidad.
+*   Ecuación de Euler para fluidos ideales.
+*   Integración de la ecuación de Euler (Ecuación de Bernoulli, alturas piezométrica y cinética).
+*   Tubo de Pitot.
+*   Presión absoluta y relativa.
+
+**7. Medición y Errores:**
+*   Medición e incertezas (error absoluto).
+*   Mediciones directas e indirectas.
+*   Cifras significativas.
+*   Mínima división e incerteza.
+*   Error relativo y porcentual.
+*   Propagación de errores (método directo, de tabla, de la derivada).
+*   Aproximaciones y recorte de cifras.
+*   Tablas de mediciones, mediciones comparables.
+*   Exactitud y precisión.
+*   Fuentes de error (groseros, sistemáticos, casuales).
+
+Si tu pregunta se enmarca dentro de alguno de estos temas, estaré encantado de ayudarte con una explicación clara y detallada.

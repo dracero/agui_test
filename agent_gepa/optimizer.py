@@ -171,7 +171,7 @@ class ResponseJudge(dspy.Signature):
     """Evalúa si una respuesta es apropiada para un profesor de física - clara, precisa y pedagógica."""
     question = dspy.InputField()
     answer = dspy.InputField()
-    score = dspy.OutputField(desc="Puntaje entre 0 y 10. Criterios para ALTO puntaje (8-10): 1) Explica conceptos de forma clara y precisa, 2) Incluye las expresiones matemáticas relevantes con explicación de sus variables y significado, 3) Proporciona demostraciones o derivaciones sencillas cuando corresponda, 4) Usa lenguaje pedagógico apropiado al nivel de la consulta, 5) Es completo pero conciso. Criterios para BAJO puntaje (0-3): 1) Respuesta vaga o imprecisa, 2) Falta explicación de las ecuaciones matemáticas, 3) Lenguaje confuso o demasiado técnico sin contexto, 4) No responde directamente la consulta.")
+    score = dspy.OutputField(desc="Puntaje entre 0 y 10. CRITERIOS SOCRÁTICOS: ALTO (8-10): 1) Responde con una pregunta guía o pista relevante que ayuda a pensar, 2) NO da la solución directa (a menos que el usuario lo pida explícitamente), 3) Valida el input del usuario, 4) Es pedagógico y motivador. BAJO (0-3): 1) Da la respuesta directa inmediatamente sin que se lo pidan, 2) Es confuso o incorrecto, 3) Inventa información fuera de contexto.")
     reasoning = dspy.OutputField()
 
 def validate_response(gold, pred, trace=None, pred_name=None, pred_trace=None):
@@ -253,53 +253,37 @@ def optimize_agent():
     # The system will fetch real context from Qdrant and automatically classify query type
     # PROFESOR DE FÍSICA - Explicaciones claras, con expresiones matemáticas y demostraciones
     trainset = [
-        # EJERCICIO: Problema de plano inclinado con rozamiento
-        dspy.Example(
-            user_query="Un bloque de masa m baja por un plano inclinado con rozamiento. ¿Cuáles son las fuerzas que actúan y cómo planteo la segunda ley de Newton?",
-            response="¡Excelente pregunta! En este sistema actúan tres fuerzas sobre el bloque:\n\n1. **Peso (W)**: Apunta verticalmente hacia abajo con magnitud W = mg, donde g es la aceleración de gravedad.\n2. **Normal (N)**: Perpendicular al plano inclinado.\n3. **Fuerza de rozamiento (fr)**: Paralela al plano, oponiéndose al movimiento.\n\nPara aplicar la segunda ley de Newton (F = ma), es conveniente usar un sistema de coordenadas rotado con el eje x paralelo al plano:\n\n**Descomposición del peso:**\n- Componente paralela: Wx = mg·sen(θ)\n- Componente perpendicular: Wy = mg·cos(θ)\n\n**Ecuaciones de movimiento:**\n- Eje x: mg·sen(θ) - fr = ma\n- Eje y: N - mg·cos(θ) = 0\n\nDonde fr = μN (μ es el coeficiente de fricción). De la segunda ecuación: N = mg·cos(θ), sustituyendo:\n\n**ma = mg·sen(θ) - μmg·cos(θ)**\n\nSimplificando: **a = g(sen(θ) - μcos(θ))**"
-        ).with_inputs("user_query"),
-        
-        # CONCEPTUAL: Diferencia entre tipos de ondas
+        # CASO 1: Pregunta conceptual -> Guía Socrática
         dspy.Example(
             user_query="¿Cuál es la diferencia entre una onda transversal y una longitudinal?",
-            response="La diferencia fundamental está en la **dirección de oscilación** de las partículas del medio respecto a la dirección de propagación de la onda:\n\n**Onda Transversal:**\n- Las partículas oscilan perpendicular (⊥) a la dirección de propagación\n- Ejemplo: ondas en una cuerda, luz, ondas en agua\n- Tiene crestas y valles claramente definidos\n- Representación matemática: y(x,t) = A·sen(kx - ωt), donde y es el desplazamiento perpendicular\n\n**Onda Longitudinal:**\n- Las partículas oscilan paralela (∥) a la dirección de propagación\n- Ejemplo: sonido, ondas sísmicas P\n- Tiene compresiones y rarefacciones\n- Las partículas se comprimen y expanden en la misma dirección del movimiento de la onda\n\n**Parámetros comunes:**\nAmbas tienen: velocidad v = λf (donde λ es longitud de onda y f frecuencia), amplitud A, y pueden expresarse con la ecuación de onda general."
+            response="¡Buena pregunta! Pensemos en cómo se mueven las partículas. En una cuerda (onda transversal), ¿hacia dónde se mueve la cuerda cuando la onda avanza hacia adelante? ¿Y qué pasa con el sonido en el aire (longitudinal)?"
         ).with_inputs("user_query"),
-        
-        # CONCEPTUAL: Ley de Snell y reflexión total
+
+        # CASO 2: Ejercicio práctico -> Pregunta sobre primer paso
         dspy.Example(
-            user_query="Explica la ley de Snell y qué sucede cuando la luz pasa de un medio con mayor índice de refracción a uno menor.",
-            response="La **Ley de Snell** describe cómo cambia la dirección de un rayo de luz al pasar entre dos medios con diferentes índices de refracción:\n\n**n₁·sen(θ₁) = n₂·sen(θ₂)**\n\nDonde:\n- n₁, n₂: índices de refracción de los medios 1 y 2\n- θ₁, θ₂: ángulos de incidencia y refracción (medidos desde la normal)\n\nEl índice de refracción n = c/v, donde c es la velocidad de la luz en el vacío y v en el medio.\n\n**Caso específico n₁ > n₂ (por ejemplo, agua → aire):**\n\nDe la ley de Snell: sen(θ₂) = (n₁/n₂)·sen(θ₁)\n\nComo n₁ > n₂, entonces (n₁/n₂) > 1, por lo que θ₂ > θ₁.\n\n**Resultado:** El rayo se **aleja de la normal**.\n\n**Ángulo crítico:** Existe un θc = arcsen(n₂/n₁) tal que si θ₁ > θc, ocurre **reflexión total interna** (el rayo no se transmite, solo se refleja). Este fenómeno es la base de las fibras ópticas."
+            user_query="Un bloque de masa m baja por un plano inclinado con rozamiento. ¿Cuáles son las fuerzas?",
+            response="Analicemos el diagrama de cuerpo libre. Si el bloque tiene masa, seguro hay una fuerza vertical hacia abajo, ¿verdad? ¿Cómo se llama esa fuerza? Y si hay contacto con la superficie, ¿qué fuerza impide que el bloque se hunda en el plano?"
         ).with_inputs("user_query"),
-        
-        # EJERCICIO: Cálculo de centro de masa
+
+        # CASO 3: Usuario pide la respuesta explícitamente -> Respuesta Directa
         dspy.Example(
-            user_query="Calcula el centro de masa de tres partículas: m₁=2kg en (0,0), m₂=3kg en (4,0), y m₃=1kg en (2,3).",
-            response="Para calcular el centro de masa usamos la fórmula del promedio ponderado de las posiciones:\n\n**R_cm = (Σ mᵢ·rᵢ) / M_total**\n\n**Datos:**\n- m₁ = 2kg en (0, 0)\n- m₂ = 3kg en (4, 0)\n- m₃ = 1kg en (2, 3)\n- M_total = 2 + 3 + 1 = 6kg\n\n**Componente x:**\nx_cm = (m₁·x₁ + m₂·x₂ + m₃·x₃) / M_total\nx_cm = (2·0 + 3·4 + 1·2) / 6\nx_cm = (0 + 12 + 2) / 6 = 14/6 = **2.33 m**\n\n**Componente y:**\ny_cm = (m₁·y₁ + m₂·y₂ + m₃·y₃) / M_total\ny_cm = (2·0 + 3·0 + 1·3) / 6\ny_cm = 3/6 = **0.5 m**\n\n**Resultado:** El centro de masa está en **(2.33, 0.5) m**\n\nNota que está más cerca de m₂ porque es la masa más grande del sistema."
+            user_query="No entiendo nada, dame la solución del problema del plano inclinado por favor.",
+            response="Entiendo, veamos la solución completa. Las fuerzas son: 1) **Peso (mg)** hacia abajo, 2) **Normal (N)** perpendicular al plano, y 3) **Fricción (fr)** opuesta al movimiento. La ecuación en el eje del movimiento es: mg·sen(θ) - fr = ma."
         ).with_inputs("user_query"),
-        
-        # CONCEPTUAL: Definición de momento de inercia
+
+        # CASO 4: Concepto erróneo -> Corrección guiada
         dspy.Example(
-            user_query="¿Qué es el momento de inercia y por qué depende de cómo está distribuida la masa?",
-            response="El **momento de inercia (I)** es la medida de la resistencia de un cuerpo a cambiar su velocidad angular. Es el análogo rotacional de la masa en el movimiento lineal.\n\n**Definición matemática:**\n\n**I = Σ mᵢ·rᵢ²** (para partículas discretas)\n**I = ∫ r²·dm** (para cuerpos continuos)\n\nDonde rᵢ es la **distancia perpendicular** del elemento de masa al eje de rotación.\n\n**¿Por qué depende de la distribución de masa?**\n\nObserva que cada elemento de masa se multiplica por r², no solo por r. Esto significa que la masa lejos del eje contribuye MUCHO más al momento de inercia que la masa cerca del eje.\n\n**Ejemplo ilustrativo:**\nConsideremos dos varillas de igual masa M y longitud L:\n1. Eje por el centro: I = (1/12)ML²\n2. Eje por un extremo: I = (1/3)ML²\n\nLa segunda tiene el triple de momento de inercia porque la masa promedio está más lejos del eje de rotación.\n\n**Analogía física:**\n- En rotación: τ = Iα (torque = momento de inercia × aceleración angular)\n- En traslación: F = ma (fuerza = masa × aceleración lineal)\n\nAsí como objetos más masivos son más difíciles de acelerar linealmente, objetos con mayor momento de inercia son más difíciles de acelerar angularmente."
+            user_query="La energía cinética se conserva en todos los choques, ¿verdad?",
+            response="Cuidado con eso. En los choques elásticos sí se conserva, pero ¿qué pasa en un choque inelástico, como cuando dos bolas de plastilina se pegan? ¿A dónde crees que va esa energía de movimiento?"
         ).with_inputs("user_query"),
-        
-        # EJERCICIO: Energía cinética rotacional
+
+        # CASO 5: Pregunta sobre fórmula -> Pista sobre variables
         dspy.Example(
-            user_query="Un disco sólido de masa 2kg y radio 0.3m gira a 10 rad/s. ¿Cuál es su energía cinética rotacional?",
-            response="Para calcular la energía cinética rotacional usamos:\n\n**E_rot = ½Iω²**\n\n**Paso 1: Determinar el momento de inercia**\n\nPara un disco sólido rotando sobre su eje central:\n**I = ½MR²**\n\nCon M = 2kg y R = 0.3m:\nI = ½ × 2 × (0.3)²\nI = 1 × 0.09 = **0.09 kg·m²**\n\n**Paso 2: Calcular la energía cinética**\n\nCon ω = 10 rad/s:\nE_rot = ½ × I × ω²\nE_rot = ½ × 0.09 × (10)²\nE_rot = ½ × 0.09 × 100\nE_rot = **4.5 J**\n\n**Resultado:** La energía cinética rotacional del disco es **4.5 Joules**.\n\nNota: Esta fórmula es análoga a E = ½mv² para movimiento lineal, donde I reemplaza a m y ω reemplaza a v."
+            user_query="¿Cómo calculo el momento de inercia de un disco?",
+            response="Depende del eje de rotación. Si gira por su centro, la fórmula involucra la masa M y el radio R. ¿Recuerdas si el factor era 1/2 o MR² completo? Piensa en cómo está distribuida la masa respecto al centro."
         ).with_inputs("user_query"),
-        
-        # CONCEPTUAL: Principio de conservación del momento angular
-        dspy.Example(
-            user_query="¿Qué es el momento angular y cuándo se conserva?",
-            response="El **momento angular (L)** es la cantidad de movimiento rotacional de un objeto. Es el análogo rotacional del momento lineal (p = mv).\n\n**Definición matemática:**\n\nPara una partícula: **L = r × p = m(r × v)**\nPara un cuerpo rígido: **L = Iω**\n\nDonde:\n- r: vector posición desde el eje\n- p: momento lineal\n- I: momento de inercia\n- ω: velocidad angular\n\n**Conservación del momento angular:**\n\nEl momento angular se conserva cuando el **torque externo neto es cero**:\n\n**Si τ_ext = 0 → L = constante**\n\nEsto es análogo a la conservación del momento lineal cuando F_ext = 0.\n\n**Ejemplos prácticos:**\n\n1. **Patinador en hielo:** Al recoger los brazos, disminuye I. Como L = Iω se conserva, ω aumenta (gira más rápido).\n\n2. **Planeta orbitando:** El torque gravitacional es cero porque la fuerza apunta hacia el centro. Por eso L se conserva y se cumple la segunda ley de Kepler (áreas iguales en tiempos iguales).\n\n3. **Giroscopio:** Mantiene su orientación porque L se conserva en ausencia de torques externos.\n\n**Relación con torque:**\nτ = dL/dt (el torque es la razón de cambio del momento angular, análogo a F = dp/dt)"
-        ).with_inputs("user_query"),
-        
-        # EJERCICIO: Colisión elástica unidimensional
-        dspy.Example(
-            user_query="Dos bolas chocan elásticamente. La bola 1 (m₁=2kg, v₁=3m/s) golpea a la bola 2 (m₂=1kg, v₂=0). ¿Cuáles son sus velocidades finales?",
-            response="En una **colisión elástica** se conservan tanto el momento lineal como la energía cinética.\n\n**Datos:**\n- m₁ = 2kg, v₁ᵢ = 3m/s\n- m₂ = 1kg, v₂ᵢ = 0m/s\n\n**Ecuaciones de conservación:**\n\n1. **Momento lineal:** m₁v₁ᵢ + m₂v₂ᵢ = m₁v₁f + m₂v₂f\n2. **Energía cinética:** ½m₁v₁ᵢ² + ½m₂v₂ᵢ² = ½m₁v₁f² + ½m₂v₂f²\n\n**Fórmulas para colisión elástica 1D:**\n\nv₁f = [(m₁-m₂)v₁ᵢ + 2m₂v₂ᵢ] / (m₁+m₂)\nv₂f = [(m₂-m₁)v₂ᵢ + 2m₁v₁ᵢ] / (m₁+m₂)\n\n**Sustituyendo valores:**\n\nv₁f = [(2-1)×3 + 2×1×0] / (2+1)\nv₁f = [3 + 0] / 3 = **1 m/s**\n\nv₂f = [(1-2)×0 + 2×2×3] / (2+1)\nv₂f = [0 + 12] / 3 = **4 m/s**\n\n**Resultado:**\n- Bola 1: v₁f = **1 m/s** (se desacelera)\n- Bola 2: v₂f = **4 m/s** (sale rápido)\n\n**Verificación:**\n- Momento inicial: 2×3 + 1×0 = 6 kg·m/s\n- Momento final: 2×1 + 1×4 = 6 kg·m/s ✓\n- Energía inicial: ½×2×9 = 9 J\n- Energía final: ½×2×1 + ½×1×16 = 1 + 8 = 9 J ✓"
-        ).with_inputs("user_query"),
+
+
     ]
     
     # 3. Set up GEPA optimizer

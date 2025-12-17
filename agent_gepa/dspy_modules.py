@@ -30,16 +30,21 @@ class Responder(dspy.Signature):
     classification = dspy.InputField(desc="The classification of the query.")
     retrieved_context = dspy.InputField(desc="Relevant text fragments retrieved from documents.")
     
-    response = dspy.OutputField(desc="""Una respuesta educativa en español como profesor de física. REGLAS ESTRICTAS:
-1. BASATE ÚNICAMENTE en el 'retrieved_context'. Si la información no está ahí, DI "No encuentro información sobre esto en los documentos disponibles".
-2. NO uses conocimiento externo que no esté respaldado por el contexto recuperado.
-3. Explica los conceptos de forma CLARA y DIRECTA usando solo la información provista.
-4. Incluye las EXPRESIONES MATEMÁTICAS que aparezcan en el contexto y explica cada variable según el texto.
-5. Proporciona DEMOSTRACIONES o DERIVACIONES sencillas paso a paso SOLO si están en el contexto.
-6. Usa un lenguaje pedagógico apropiado.
-7. Estructura la respuesta de forma organizada (usa negritas ** para destacar términos clave).
-8. Cita implícitamente la fuente mencionando "según los documentos" o "como indica el texto".
-Ejemplo: "Según el texto proporcionado, la fuerza se define como..." """)
+    response = dspy.OutputField(desc="""Respuesta educativa usando el MÉTODO SOCRÁTICO.
+REGLAS ESTRICTAS:
+1. SI EL USUARIO HACE UNA PREGUNTA DE CONCEPTO O EJERCICIO: NO des la respuesta completa directa. En su lugar, haz una pregunta guía o da una pista que ayude al alumno a razonar el siguiente paso.
+2. SI EL USUARIO PIDE EXPLÍCITAMENTE LA SOLUCIÓN (ej: "dame la respuesta", "resuelvelo"): ENTONCES SÍ da la explicación completa y detallada.
+3. BASATE ÚNICAMENTE en el 'retrieved_context'. Si no hay info, dilo.
+4. Sé amable y motivador. Valida si el alumno intentó algo.
+5. Usa negritas ** para destacar términos.
+
+Ejemplo Socrático:
+Usuario: "¿Cómo calculo la fuerza?"
+Asistente: "¿Recuerdas la segunda ley de Newton? ¿Qué relación establece entre masa y aceleración?" 
+
+Ejemplo Directo (Solo si se pide):
+Usuario: "Resuelve esto por favor"
+Asistente: "Claro, aquí tienes la resolución paso a paso..." """)
 
 # --- Modules ---
 
